@@ -6,18 +6,20 @@ const LIBRARY = "libneuralbloch.so"
 const BUILDER = "neuralbloch-build"
 
 """
-    Native(dir)
+    Native(dir, csrc)
 
 The compiled products in their cache entry `dir`: the runtime library
-(`library`) and the builder executable (`builder`).
+(`library`) and the builder executable (`builder`), compiled from sources
+with digest `csrc` (see [`csrc_hash`](@ref)).
 """
 struct Native
     dir::String
     library::String
     builder::String
+    csrc::String
 end
 
-Native(dir::AbstractString) = Native(dir, joinpath(dir, LIBRARY), joinpath(dir, BUILDER))
+Native(dir::AbstractString, csrc::AbstractString) = Native(dir, joinpath(dir, LIBRARY), joinpath(dir, BUILDER), csrc)
 
 """
     CompileError(cmd, output, tensorrt)
@@ -102,7 +104,8 @@ carrying g++'s output, when compiling fails.
 function compile(sys::System = detect(); csrc::AbstractString = csrc_dir(),
                  root::AbstractString = joinpath(cache_root(), "native"))
     require(sys; gpu = false)
-    dir = getorbuild(root, native_key(sys, csrc); what = "NeuralBloch's C++ code") do tmp
+    key = native_key(sys, csrc)
+    dir = getorbuild(root, key; what = "NeuralBloch's C++ code") do tmp
         @info "Compiling NeuralBloch's C++ code against TensorRT $(vstring(sys.nvinfer.version)) " *
               "(once per TensorRT version and source change)."
         t = time()
@@ -112,5 +115,5 @@ function compile(sys::System = detect(); csrc::AbstractString = csrc_dir(),
                                 "builder_command" => sprint(show, builder),
                                 "seconds" => round(time() - t; digits = 2))
     end
-    return Native(dir)
+    return Native(dir, key["csrc_sha256"])
 end

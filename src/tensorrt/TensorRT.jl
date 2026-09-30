@@ -17,5 +17,6 @@ using TOML: TOML
 include("system.jl")
 include("cache.jl")
 include("compile.jl")
+include("build.jl")
 
 end
