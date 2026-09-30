@@ -1,0 +1,21 @@
+# Runs tier T0 only (Julia-only tests). Hosted runners have neither a GPU nor
+# TensorRT, so the test suite skips T1–T3 by itself and prints why; nothing
+# here selects tiers. T0–T3 run on a GPU machine with TensorRT installed.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: "1.12"
+      - uses: julia-actions/cache@v2
+      - uses: julia-actions/julia-buildpkg@v1
+      - uses: julia-actions/julia-runtest@v1

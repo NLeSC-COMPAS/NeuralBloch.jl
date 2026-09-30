@@ -1,0 +1,7 @@
+name = "NeuralBloch"
+uuid = "fc2c3a6e-ac2b-47d5-8560-37c768c6a653"
+authors = ["Cunliang Geng <c.geng@esciencecenter.nl>"]
+version = "0.1.0"
+
+[compat]
+julia = "1.12"
