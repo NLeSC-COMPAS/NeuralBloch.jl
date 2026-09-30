@@ -3,5 +3,11 @@ uuid = "fc2c3a6e-ac2b-47d5-8560-37c768c6a653"
 authors = ["Cunliang Geng <c.geng@esciencecenter.nl>"]
 version = "0.1.0"
 
+[deps]
+CUDACore = "bd0ed864-bdfe-4181-a5ed-ce625a5fdea2"
+Libdl = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
+
 [compat]
+CUDACore = "6"
+Libdl = "1"
 julia = "1.12"

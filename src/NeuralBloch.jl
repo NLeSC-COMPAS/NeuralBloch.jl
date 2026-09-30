@@ -16,4 +16,10 @@ Two layers:
 """
 module NeuralBloch
 
+include("tensorrt/TensorRT.jl")
+
+using .TensorRT: functional, versioninfo
+
+public functional, versioninfo
+
 end
