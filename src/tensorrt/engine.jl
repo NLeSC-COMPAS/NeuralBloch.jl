@@ -69,11 +69,12 @@ pool.
 
 Per run: [`claim!`](@ref) the handle for the stream, [`set_shape!`](@ref)
 the inputs, [`set_address!`](@ref) every input and output, [`run!`](@ref).
-`close` releases it early; otherwise a finalizer does. Not thread-safe: one
-run is set up at a time.
+Not thread-safe: one run is set up at a time, and nothing may use `h` while
+another thread closes it (the Engine's lock sees to both). `close` releases
+it early, from any thread, any number of times; otherwise a finalizer does.
 """
 mutable struct Handle
-    ptr::Ptr{Cvoid}
+    @atomic ptr::Ptr{Cvoid}                    # C_NULL once closed; swapped out exactly once
     const api::API
     const path::String
     const context::CUDACore.CuContext
@@ -115,24 +116,27 @@ function tensorinfo(h::Handle, i::Integer)
     return TensorInfo(name, input, eltype, shape, profile)
 end
 
-# Close without making the context current: the finalizer's path. TensorRT's
-# CUDA runtime falls back to device 0's primary context, CUDA.jl's own.
+# Free the TensorRT objects exactly once, however many threads get here: the
+# pointer is swapped out before it is used. Without making the context
+# current, since this is also the finalizer's path: TensorRT's CUDA runtime
+# then falls back to device 0's primary context, CUDA.jl's own.
 function release!(h::Handle)
-    if h.ptr != C_NULL
-        ccall(h.api.close, Cvoid, (Ptr{Cvoid},), h.ptr)
-        h.ptr = C_NULL
-    end
+    ptr = @atomicswap h.ptr = C_NULL
+    ptr == C_NULL || ccall(h.api.close, Cvoid, (Ptr{Cvoid},), ptr)
     return nothing
 end
 
 """
     close(h::Handle)
 
-Release the engine, its execution context and scratch memory. Safe to call
-more than once; any later use of `h` throws.
+Release the engine, its execution context and scratch memory, after the runs
+queued on the latest claimed stream have finished. Safe to call more than
+once, from any thread; any later use of `h` throws.
 """
 function Base.close(h::Handle)
-    h.ptr == C_NULL && return nothing
+    isopen(h) || return nothing
+    stream = h.stream
+    stream === nothing || CUDACore.synchronize(stream)   # queued runs use the scratch memory
     CUDACore.activate(h.context)
     return release!(h)
 end
@@ -140,8 +144,9 @@ end
 Base.isopen(h::Handle) = h.ptr != C_NULL
 
 @inline function checkopen(h::Handle)
-    h.ptr == C_NULL && throw_closed(h)
-    return h.ptr
+    ptr = h.ptr
+    ptr == C_NULL && throw_closed(h)
+    return ptr
 end
 
 @noinline throw_closed(h::Handle) = throw(InvalidStateException("the TensorRT engine $(h.path) is closed", :closed))

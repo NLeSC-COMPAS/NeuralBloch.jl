@@ -56,10 +56,21 @@ Base.show(io::IO, e::Engine) = print(io, "Engine(NTR ", e.model.ntr, ", batch ",
 """
     close(engine::Engine)
 
-Free the engine's TensorRT resources, including its GPU scratch memory. Safe
-to call more than once; later calls to `predict!` throw.
+Free the engine's GPU memory, TensorRT's and its own buffers, once the runs
+already queued have finished. Safe to call more than once and from any
+task; `predict!` calls after it, or waiting for it, throw an
+`InvalidStateException`.
 """
-Base.close(e::Engine) = close(e.handle)
+function Base.close(e::Engine)
+    @lock e.lock begin
+        if isopen(e.handle)
+            close(e.handle)
+            CUDACore.unsafe_free!(e.input)
+            CUDACore.unsafe_free!(e.sink)
+        end
+    end
+    return nothing
+end
 Base.isopen(e::Engine) = isopen(e.handle)
 
 # --- metadata -----------------------------------------------------------------------

@@ -229,10 +229,44 @@ tier(:T2, "predict: close") do
     e = Engine(; batch = (1, 64, 1000))
     p = voxels(8)
     predict(e, p)
+    predict(e, voxels(1000); derivatives = false)               # grows the engine's sink
+    synchronize()
+    own = sizeof(e.input) + sizeof(e.sink)
+    used = CUDACore.used_memory()
     close(e)
     @test !isopen(e)
+    @test used - CUDACore.used_memory() ≥ own                   # its buffers too, not only TensorRT's
     close(e)                                                    # idempotent
     @test_throws InvalidStateException predict(e, p)
+end
+
+tier(:T2, "predict: close races predict! and close") do
+    # One thread predicts in a loop while two others close the engine: the
+    # loop must end with InvalidStateException, and nothing may crash (a
+    # use-after-free or a double free would take the process down).
+    code = """
+    using NeuralBloch, CUDACore
+    N = 200
+    p = (T₁ = CuArray(fill(1f0, N)), T₂ = CuArray(fill(0.1f0, N)), B₁ = CuArray(fill(1f0, N)))
+    seen = Set{String}()
+    for round in 1:10
+        e = Engine(; batch = (1, 64, 1000))
+        out = outputs(e, N)
+        running = Threads.@spawn try
+            while true
+                predict!(out, e, p)
+            end
+        catch err
+            err
+        end
+        sleep(0.05)
+        foreach(wait, [Threads.@spawn close(e) for _ in 1:2])
+        push!(seen, string(nameof(typeof(fetch(running)))))
+    end
+    print(join(sort(collect(seen)), ","))
+    """
+    cmd = `$(Base.julia_cmd()) -t 3 --startup-file=no --project=$(Base.active_project()) -e $code`
+    @test readchomp(pipeline(cmd; stderr = devnull)) == "InvalidStateException"
     foreach(close, values(ENGINES))
     empty!(ENGINES)
 end
