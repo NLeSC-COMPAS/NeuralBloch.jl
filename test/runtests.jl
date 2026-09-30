@@ -17,4 +17,5 @@ include("tiers.jl")
 @testset "NeuralBloch" begin
     include("test_quality.jl")
     include("test_system.jl")
+    include("test_cache.jl")
 end
