@@ -284,6 +284,38 @@ at 1000, ≤ 6% from 4000 up.
 - The small-batch gain is real but only ≈ 70 µs per call; revisit if a
   small-batch hot loop ever matters.
 
+## S10 — staging the input without allocating (`s10_staging.jl`)
+
+Added 2026-10-01, while implementing task 9: an uncertain point the plan did
+not list. The engine reads one (3, N) Float32 matrix [T₁; T₂; B₁]; callers
+hand in three vectors, which `predict!` must copy into a staging buffer on
+the task's stream, and after warm-up `predict!` must not allocate on the
+host. CUDACore 6.4.0, N = 14400:
+
+| Staging | host bytes per call | wall µs | host submission µs |
+|---|---|---|---|
+| 3 broadcasts `X[k, :] .= v` (MRSTAT's) | 7296 | 26.3 | 20.9 |
+| 1 `@cuda` kernel writing all three rows | 912 | 9.5 | 4.7 |
+| 3 strided `cuMemcpy2DAsync` (`CUDACore.unsafe_copy2d!`, pitch 4 → 12) | **0** | 46.6 | 10.8 |
+
+All three stage identical values. Wall time against N:
+
+| N | `@cuda` kernel | 3 strided copies |
+|---|---|---|
+| 1000 | 9.6 µs | 16.3 µs |
+| 14400 | 10.3 µs | 46.7 µs |
+| 40000 | 10.6 µs | 106.5 µs |
+
+Every Julia kernel launch allocates: CUDACore boxes each argument
+(`ArgBox`) and the pointer array (`Ref`) in `pack_arguments`. Avoiding that
+would mean launching with CUDACore internals (`KernelState`), which would
+break on its upgrades.
+
+**Conclusion.** Stage with three strided copies: the only way that
+allocates nothing. They cost ≈ 3% of the engine's own time from 14400 voxels
+up (7% at 1000). A `@cuda` kernel would take ≈ 10 µs flat, at 912 bytes per
+call; revisit if the zero-allocation requirement is ever relaxed.
+
 ## Decisions
 
 Phase 0 settles the open questions below. Where the plan's "Decisions needed"
@@ -309,3 +341,4 @@ table recommends an option, implementation follows that recommendation.
 | D16 | Lock parameters | Pidfile per key, `stale_age = 10` s, message only when contended | S8 |
 | D17 | CUDA graph | Not in v1 | S9 |
 | D18 | Tolerances | Bitwise within one engine; 5e-6 relative between builds | S2, S4, S6 |
+| D19 | Input staging | Three strided `cuMemcpy2DAsync`: zero host allocation, ≈ 3% of engine time | S10 |
