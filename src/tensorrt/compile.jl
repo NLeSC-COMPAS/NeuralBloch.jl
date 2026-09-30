@@ -70,8 +70,9 @@ native_key(sys::System, csrc) = Dict{String,Any}(
 # #include_next.
 default_includes() = ("/usr/include", "/usr/include/$(Sys.ARCH)-linux-gnu")
 
-# Compile `src` into `dir/name`; return the command, or throw a CompileError.
-# g++ runs in `dir`, so the command names its output relative to the entry.
+# Compile `src` into `dir/name`, a shared library (exporting what exports.map
+# lists) or an executable; return the command, or throw a CompileError. g++
+# runs in `dir`, so the command names its output relative to the entry.
 #
 # Deliberately no -static-libstdc++: Julia dlopens with RTLD_DEEPBIND, and a
 # second, static C++ runtime inside the library would shadow the process's
@@ -80,10 +81,11 @@ default_includes() = ("/usr/include", "/usr/include/$(Sys.ARCH)-linux-gnu")
 function gxx(sys::System, src, dir, name; shared::Bool)
     includes = [["-isystem", d] for d in (sys.headers.dir, sys.cuda.dir) if !(d in default_includes())]
     major = sys.nvinfer.version.major
+    kind = shared ? ["-fPIC", "-shared", "-Wl,--version-script=" * joinpath(dirname(src), "exports.map")] :
+                    String[]
     libs = ["-l:libnvinfer.so.$major"; shared ? String[] : ["-l:libnvonnxparser.so.$major"]]
     cmd = `$(sys.compiler.path) -std=c++17 -O2 -Wall -Wextra -fvisibility=hidden
-           -fvisibility-inlines-hidden $(shared ? ["-fPIC", "-shared"] : String[])
-           $(reduce(vcat, includes; init = String[])) $src -o $name
+           -fvisibility-inlines-hidden $kind $(reduce(vcat, includes; init = String[])) $src -o $name
            -L$(dirname(sys.nvinfer.path)) $libs -Wl,--no-undefined`
     output = IOBuffer()
     p = run(pipeline(ignorestatus(Cmd(cmd; dir)); stdout = output, stderr = output))

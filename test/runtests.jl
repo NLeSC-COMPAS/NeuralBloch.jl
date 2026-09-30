@@ -2,7 +2,7 @@
 #
 #     julia --project -e 'using Pkg; Pkg.test()'
 #
-# One file per module. Each testset belongs to a tier (see tiers.jl) and is
+# One file per module. Each testset belongs to a tier (see setup.jl) and is
 # skipped, with the reason printed, when this machine lacks the tier's
 # prerequisites; NEURALBLOCH_TEST_ALL=1 turns such skips into failures.
 #
@@ -12,7 +12,7 @@
 using Test
 using NeuralBloch
 
-include("tiers.jl")
+include("setup.jl")
 
 @testset "NeuralBloch" begin
     include("test_quality.jl")
@@ -20,4 +20,5 @@ include("tiers.jl")
     include("test_cache.jl")
     include("test_compile.jl")
     include("test_build.jl")
+    include("test_engine.jl")
 end

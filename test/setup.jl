@@ -1,3 +1,5 @@
+# Shared by every test file: the test tiers, and fixtures.
+#
 # Test tiers. A tier runs when the machine provides its prerequisites;
 # otherwise each of its testsets is skipped and the reason printed. With
 # NEURALBLOCH_TEST_ALL=1 a skip counts as a failure, so a machine that should
@@ -43,3 +45,7 @@ function tier(f, t::Symbol, name::AbstractString)
         end
     end
 end
+
+# --- fixtures -------------------------------------------------------------------
+
+const ONNX = joinpath(pkgdir(NeuralBloch), "models", "model.onnx")

@@ -126,7 +126,7 @@ void print_versions() {
 }
 
 int build(const Options& o) {
-    nb::Logger logger(ILogger::Severity::kWARNING);
+    nb::Logger logger(true);  // stderr is the builder's log: errors too
     const auto t0 = std::chrono::steady_clock::now();
 
     std::unique_ptr<IBuilder> builder(createInferBuilder(logger));

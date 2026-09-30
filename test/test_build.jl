@@ -4,8 +4,6 @@ using NeuralBloch.TensorRT: build, BuildSettings, BuildError, PrerequisiteError,
                             read_manifest, csrc_hash, vstring
 using SHA: sha256
 
-const ONNX = joinpath(pkgdir(NeuralBloch), "models", "model.onnx")
-
 tier(:T0, "build: settings") do
     s = BuildSettings()
     @test (s.batch, s.tf32, s.optlevel) == ((1, 14400, 40000), false, 3)   # dev/NOTES.md D3, D10

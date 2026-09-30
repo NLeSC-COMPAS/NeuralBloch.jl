@@ -30,19 +30,21 @@ namespace nb {
 // another thread between two ccalls without yielding.
 inline thread_local std::string last_error;
 
-inline void set_error(const std::string& message) noexcept {
+// Record that `what` failed, followed by whatever TensorRT logged about it
+// since the call began (entry points clear the slot first).
+inline void fail(const std::string& what) noexcept {
     try {
-        last_error = message;
-    } catch (...) {  // out of memory while reporting: keep what fits
+        last_error = last_error.empty() ? what : what + ": " + last_error;
+    } catch (...) {  // out of memory while reporting: keep what is there
     }
 }
 
-// TensorRT's logger. Errors TensorRT reports are appended to the calling
-// thread's error slot, so a failed call returns TensorRT's own explanation;
-// messages at or above `echo` also go to stderr.
+// TensorRT's logger. Errors are appended to the calling thread's error slot,
+// so a failed call reports TensorRT's own explanation; warnings go to stderr,
+// and so do errors when `echo_errors` (the builder, whose stderr is its log).
 class Logger : public nvinfer1::ILogger {
 public:
-    explicit Logger(Severity echo) noexcept : echo_(echo) {}
+    explicit Logger(bool echo_errors) noexcept : echo_errors_(echo_errors) {}
 
     void log(Severity severity, const char* message) noexcept override {
         if (severity <= Severity::kERROR) {
@@ -52,11 +54,12 @@ public:
             } catch (...) {
             }
         }
-        if (severity <= echo_) std::fprintf(stderr, "[TensorRT] %s\n", message);
+        if (severity == Severity::kWARNING || (severity <= Severity::kERROR && echo_errors_))
+            std::fprintf(stderr, "[TensorRT] %s\n", message);
     }
 
 private:
-    Severity echo_;
+    bool echo_errors_;
 };
 
 // TensorRT's version as {major, minor, patch, build}: the headers compiled
