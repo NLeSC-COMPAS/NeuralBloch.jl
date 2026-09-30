@@ -8,9 +8,12 @@
 using NeuralBloch: Engine, Model, predict, sequence
 using CUDACore: CuArray
 using Random: Xoshiro
+using StructArrays: StructArray
 
+# BlochSimulators is loaded only where T3 can run, so nothing below may use
+# its macros: they would have to expand while this file is included anyway.
 if blocker(:T3) === nothing
-    using BlochSimulators: BlochSimulators, FISP3D, @parameters, gpu, f32, simulate_magnetization,
+    using BlochSimulators: BlochSimulators, FISP3D, gpu, f32, simulate_magnetization,
                            simulate_derivatives_finite_difference
     using ComputationalResources: CUDALibs
 end
@@ -33,8 +36,7 @@ function epg_reference(model, v)
     rf = s.rf_angle .* exp.(im .* deg2rad.(s.rf_phase))            # degrees, phases in radians
     seq = gpu(f32(FISP3D(rf, s.TR, s.TE, s.max_state, s.TI, s.TW, s.repetitions, s.inversion_prepulse,
                          s.wait_spoiling, s.undersampling_factor, s.delta_k_spoil)))
-    T₁, T₂, B₁ = v.T₁, v.T₂, v.B₁
-    parameters = gpu(f32(@parameters T₁ T₂ B₁))
+    parameters = gpu(f32(StructArray{BlochSimulators.T₁T₂B₁{Float64}}((v.T₁, v.T₂, v.B₁))))  # @parameters T₁ T₂ B₁
     echos = simulate_magnetization(CUDALibs(), seq, parameters)
     d = model.derivatives
     steps = BlochSimulators.T₁T₂B₁B₀(d.dT1_step, d.dT2_step, BlochSimulators.DEFAULT_ΔB₁, BlochSimulators.DEFAULT_ΔB₀)
