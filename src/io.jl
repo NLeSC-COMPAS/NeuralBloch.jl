@@ -116,6 +116,23 @@ function checkinputs(p)
     return N
 end
 
+"""
+    batch_problem(batch, ntr, N) -> Union{Nothing,String}
+
+`nothing` when an engine accepting `batch = (; min, opt, max)` voxels per
+call can take `N` voxels (0 is nothing to do), otherwise what to do instead.
+"""
+function batch_problem(batch::NamedTuple, ntr::Integer, N::Integer)
+    (N == 0 || batch.min ≤ N ≤ batch.max) && return nothing
+    what = "a batch of $N voxels is outside this engine's range, $(batch.min) to $(batch.max) voxels. "
+    N < batch.min && return what * "Use an engine built for smaller batches: " *
+                            "Engine(model; batch = (min, opt, max)) with min ≤ $N."
+    step = 256 ÷ gcd(256, ntr * sizeof(ComplexF32))
+    return what * "Split it into chunks (column views of the outputs; chunk boundaries at multiples of " *
+           "$step voxels keep them aligned), or use an engine built for it: " *
+           "Engine(model; batch = (min, opt, max)) with max ≥ $N."
+end
+
 # --- outputs -----------------------------------------------------------------------
 
 """

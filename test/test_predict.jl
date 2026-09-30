@@ -49,6 +49,15 @@ tier(:T0, "predict: model metadata and checkdomain") do
     err = @test_throws ArgumentError checkdomain(m, q)
     @test occursin("2 voxels have T₂ ≥ T₁", sprint(showerror, err.value))
     @test_throws ArgumentError checkdomain(m, (; ρ = p.B₁))
+
+    # The bounds themselves are inside, also once rounded to Float32 (which
+    # puts 0.01f0 below 0.01): MRSTAT clamps its parameters to domain().
+    edges = (T₁ = Float32[0.1, 5.0], T₂ = Float32[0.01, 2.0], B₁ = Float32[0.8, 1.2])
+    @test checkdomain(m, edges) === edges
+    @test checkdomain(m, (T₁ = [0.1, 5.0], T₂ = [0.01, 2.0], B₁ = [0.8, 1.2])) isa NamedTuple
+    below = (; edges..., T₂ = [prevfloat(Float32(0.01, RoundDown)), 2.0f0])
+    err = @test_throws ArgumentError checkdomain(m, below)
+    @test occursin("p.T₂", sprint(showerror, err.value))
 end
 
 tier(:T2, "predict: engine metadata") do
@@ -157,6 +166,17 @@ tier(:T2, "predict: bad inputs and batch sizes are refused") do
     msg = sprint(showerror, err.value)
     @test occursin("1001 voxels", msg) && occursin("1 to 1000", msg)
     @test occursin("batch = ", msg)                            # how to get an engine that fits
+
+    # predict refuses before allocating outputs a batch that size would need.
+    large = voxels(2000)
+    @test (CUDACore.@allocated try predict(small, large) catch end) == 0
+    @test_throws ArgumentError predict(small, large)
+
+    # An empty batch (a mask with no voxels) is nothing to do.
+    empty = voxels(0)
+    out0 = outputs(small, 0)
+    @test predict!(out0, small, empty) === out0
+    @test size(predict(small, empty).signal) == (600, 0)
 end
 
 tier(:T2, "predict: results are in stream order, without synchronizing") do

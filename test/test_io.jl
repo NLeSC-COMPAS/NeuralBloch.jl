@@ -3,7 +3,7 @@
 # in for engines and GPU arrays.
 
 using NeuralBloch: BundleError, publicname, cardname, bindings, input_problem, output_problem,
-                   layout_problem, overlap_problem, checkinputs, checkoutputs
+                   layout_problem, overlap_problem, batch_problem, checkinputs, checkoutputs
 using NeuralBloch.TensorRT: TensorInfo
 using CUDACore: CuArray, CuMatrix, CuVector, DeviceMemory
 
@@ -65,6 +65,19 @@ tier(:T0, "io: output types") do
                              Tuple{UnitRange{Int},Base.Slice{Base.OneTo{Int}}},false}
     @test occursin("contiguous", output_problem(noncontiguous))
     @test occursin("not an array", output_problem(Int))
+end
+
+tier(:T0, "io: batch sizes") do
+    b = (min = 10, opt = 64, max = 1000)
+    @test batch_problem(b, 600, 0) === nothing                   # nothing to do: fine
+    @test batch_problem(b, 600, 10) === nothing
+    @test batch_problem(b, 600, 1000) === nothing
+    large = batch_problem(b, 600, 1001)
+    @test occursin("1001 voxels", large) && occursin("10 to 1000", large)
+    @test occursin("Split", large) && occursin("multiples of 4", large) && occursin("max ≥ 1001", large)
+    small = batch_problem(b, 600, 5)
+    @test occursin("5 voxels", small) && occursin("min ≤ 5", small)
+    @test !occursin("Split", small)                              # chunking cannot help a small batch
 end
 
 tier(:T0, "io: output layout and overlap") do

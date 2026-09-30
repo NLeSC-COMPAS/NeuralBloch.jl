@@ -142,7 +142,7 @@ derivatives, writing them into `out` in place.
   (whole arrays have it; see the error for column views), no two
   overlapping. Only the signal requested: the derivatives go to scratch
   memory the engine owns.
-- `N` must be in [`batchprofile(engine)`](@ref); otherwise split the batch.
+- `N` must be in [`batchprofile(engine)`](@ref), or 0 (then nothing happens).
 
 Asynchronous: everything is queued on the calling task's stream and ready
 in stream order, with no host synchronization (so it does not check the
@@ -152,10 +152,9 @@ before anything is queued. After warm-up it allocates nothing, on the host
 or the GPU.
 """
 function predict!(out, engine::Engine, p)
-    isopen(engine) || throw(InvalidStateException("the engine is closed", :closed))
-    N = checkinputs(p)
-    engine.batch.min ≤ N ≤ engine.batch.max || throw_batch(engine, N)
+    N = checkcall(engine, p)
     checkoutputs(out, engine.model.ntr, N)
+    N == 0 && return out
     h, io = engine.handle, engine.io
     @lock engine.lock begin
         stream = CUDACore.stream()
@@ -178,7 +177,18 @@ end
 [`predict!`](@ref) into fresh [`outputs`](@ref).
 """
 predict(engine::Engine, p; derivatives::Bool = true) =
-    predict!(outputs(engine, checkinputs(p); derivatives), engine, p)
+    predict!(outputs(engine, checkcall(engine, p); derivatives), engine, p)
+
+# The batch size of a call on `engine` with inputs `p`, once both are known to
+# be fine: before outputs are allocated for it, which a batch too large for
+# the engine could fail at.
+function checkcall(engine::Engine, p)
+    isopen(engine) || throw(InvalidStateException("the engine is closed", :closed))
+    N = checkinputs(p)
+    problem = batch_problem(engine.batch, engine.model.ntr, N)
+    problem === nothing || throw(ArgumentError(problem))
+    return N
+end
 
 # Taking the pointer hands the array to the task's stream (CUDA.jl orders
 # its free after our work); TensorRT then gets the bare address.
@@ -210,16 +220,6 @@ stage_row!(input, row, v, N, stream) =
                             1, N; dstPitch = 3 * sizeof(Float32), srcPitch = stride(v, 1) * sizeof(Float32),
                             async = true, stream)
 
-@noinline function throw_batch(engine::Engine, N)
-    b, ntr = engine.batch, engine.model.ntr
-    step = 256 ÷ gcd(256, ntr * sizeof(ComplexF32))
-    throw(ArgumentError(
-        "a batch of $N voxels is outside this engine's range, $(b.min) to $(b.max) voxels. Either split " *
-        "it into chunks (column views of the outputs; chunk boundaries at multiples of $step voxels keep " *
-        "them aligned), or use an engine built for it: Engine(model; batch = (min, opt, max)) with " *
-        "min ≤ $N ≤ max."))
-end
-
 # --- the training domain ------------------------------------------------------------
 
 """
@@ -238,9 +238,10 @@ function checkdomain(model::Model, p)
     present = filter(name -> hasproperty(p, name), FEATURES)
     isempty(present) && throw(ArgumentError("p has none of the properties T₁, T₂, B₁ that checkdomain checks"))
     for name in present
+        v = getproperty(p, name)
         lo, hi = model.domain[Symbol(cardname(name))]
-        vmin, vmax = extrema(getproperty(p, name))
-        lo ≤ vmin && vmax ≤ hi && continue
+        vmin, vmax = extrema(v)
+        within(eltype(v), lo, hi, vmin, vmax) && continue
         throw(ArgumentError("p.$name ranges over [$vmin, $vmax], outside the training domain [$lo, $hi]; " *
                             "the network extrapolates there"))
     end
@@ -253,6 +254,12 @@ function checkdomain(model::Model, p)
 end
 
 checkdomain(engine::Engine, p) = checkdomain(engine.model, p)
+
+# [vmin, vmax] ⊆ [lo, hi], with the bounds in the inputs' precision, rounded
+# outward: a bound rounded to Float32 is inside (0.01f0 < 0.01, yet it is the
+# bound as MRSTAT stores it).
+within(::Type{T}, lo, hi, vmin, vmax) where {T<:AbstractFloat} = T(lo, RoundDown) ≤ vmin && vmax ≤ T(hi, RoundUp)
+within(::Type, lo, hi, vmin, vmax) = lo ≤ vmin && vmax ≤ hi
 
 # --- reporting ----------------------------------------------------------------------
 
