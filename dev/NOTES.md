@@ -361,6 +361,24 @@ At MRSTAT's size `predict!` is on par with MRSTAT's graph-replay path
 run-to-run noise. MRSTAT's current `compute_echos_and_derivatives`, which
 copies the three outputs, takes 2.12 ms (appendix A).
 
+## Task 11 — distribution test (2026-10-01)
+
+`scripts/distribution.jl`: an empty depot (`JULIA_DEPOT_PATH` with nothing
+but Julia's bundled stdlib), `Pkg.add(url = <this repository>)`, which
+installs the committed HEAD, then `chmod -R a-w` on the installed package
+before first use. Result: all six checks pass.
+
+- Pkg downloaded the registry and every dependency (2.6 GB, mostly CUDA
+  artifacts) and resolved CUDACore 6.4.1, newer than the 6.4.0 developed
+  against; precompilation took 162 s.
+- `Engine()` announced and did both steps by itself, compiling the C++ and
+  building the engine, into the fresh depot's scratch space; nothing in the
+  read-only package directory changed (files and mtimes compared).
+- Its predictions on 3000 voxels equal the development build's **bitwise**
+  (bound 5e-6, D18).
+- First use took 3.8 minutes including all downloads; a second `Engine()` in
+  the same session 0.03 s.
+
 ## Decisions
 
 Phase 0 settles the open questions below. Where the plan's "Decisions needed"
