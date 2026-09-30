@@ -316,6 +316,51 @@ allocates nothing. They cost ≈ 3% of the engine's own time from 14400 voxels
 up (7% at 1000). A `@cuda` kernel would take ≈ 10 µs flat, at 912 bytes per
 call; revisit if the zero-allocation requirement is ever relaxed.
 
+## Task 10 — accuracy, memory and speed (2026-10-01)
+
+**Against MRSTAT.jl's engine, once** (`dev/compare_mrstat.jl`, run with the
+scripts environment). MRSTAT's `models/model.engine`, opened through this
+package's own TensorRT layer, against `predict` on MRSTAT's evaluation set
+(14400 points, seed 20260826): all three outputs **bitwise equal**, and so
+their NMAE against EPG, 0.5624 / 0.2519 / 0.4530 % (signal / ∂T₁ / ∂T₂).
+This matches S2, and settles the accuracy half of the switch-over for
+MRSTAT: its numbers do not change.
+
+**Accuracy thresholds.** The reference is BlochSimulators 0.9's FISP3D EPG
+simulation with forward differences, built from the card (sequence, RF
+tables and derivative steps).
+
+| Where | Set | Measured NMAE (signal / ∂T₁ / ∂T₂) | Bound |
+|---|---|---|---|
+| `scripts/validate.jl` | MRSTAT's 14400 points | 0.5624 / 0.2519 / 0.4530 % | 1.05 × measured, rounded up: 0.60 / 0.27 / 0.48 % |
+| T3 test | 2000 points, `Xoshiro(2026)` | 0.5507 / 0.2485 / 0.4579 % | 2 × measured: 1.10 / 0.50 / 0.92 % |
+
+A rebuilt engine moves NMAE in the sixth digit (S2, S4); convention errors
+move it to ≈ 100 %. The script's bound is tight because its job is "no worse
+than MRSTAT's engine"; the test's leaves room, as tests must not flake.
+
+**Memory.** 200 consecutive `predict!` calls at 14400 voxels, with and
+without derivatives: 0 bytes on the host, 0 bytes on the GPU, 0 GCs. (The
+one allocation found on the way: the engine's buffers typed `CuMatrix{T}`,
+which leaves the memory-type parameter open, so every call on them was
+dispatched dynamically. Concrete field types fixed it.)
+
+**Speed** (`scripts/validate.jl`, median ms, synchronized after each call;
+two runs):
+
+| N | `predict!` | signal only | engine alone | host µs | MRSTAT's `predict!` (appendix A, graph) |
+|---|---|---|---|---|---|
+| 1000 | 0.246 / 0.212 | 0.243 / 0.248 | 0.224 / 0.223 | 130 | — |
+| 10000 | 0.986 / 0.992 | 0.990 / 0.986 | 0.958 / 0.913 | 151–156 | 1.03 |
+| 14400 | 1.266 / 1.296 | 1.260 / 1.258 | 1.229 / 1.230 | 150–154 | 1.30 |
+| 40000 | 3.492 / 3.491 | 3.489 / 3.487 | 3.426 / 3.421 | 203–207 | 3.43 |
+
+At MRSTAT's size `predict!` is on par with MRSTAT's graph-replay path
+(target 1.30 ms × 1.1): the input staging costs ≈ 40 µs (S10) and plain
+`enqueueV3` loses a few percent to graph replay (S9), together within the
+run-to-run noise. MRSTAT's current `compute_echos_and_derivatives`, which
+copies the three outputs, takes 2.12 ms (appendix A).
+
 ## Decisions
 
 Phase 0 settles the open questions below. Where the plan's "Decisions needed"
