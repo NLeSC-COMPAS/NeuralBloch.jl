@@ -16,11 +16,13 @@ Two layers:
 """
 module NeuralBloch
 
+using CUDACore: CUDACore, CuArray
 using SHA: SHA
 using TOML: TOML
 
 include("tensorrt/TensorRT.jl")
 include("model.jl")
+include("io.jl")
 
 using .TensorRT: functional, versioninfo
 
