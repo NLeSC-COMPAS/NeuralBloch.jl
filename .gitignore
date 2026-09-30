@@ -1,0 +1,5 @@
+# Local work area: spike products, a stacked Julia depot, temporary files.
+/.work/
+
+# Environments are resolved per machine.
+Manifest*.toml
