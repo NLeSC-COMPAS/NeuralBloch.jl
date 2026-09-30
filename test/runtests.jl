@@ -21,4 +21,5 @@ include("setup.jl")
     include("test_compile.jl")
     include("test_build.jl")
     include("test_engine.jl")
+    include("test_model.jl")
 end

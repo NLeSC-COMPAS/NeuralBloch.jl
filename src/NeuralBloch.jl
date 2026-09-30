@@ -16,10 +16,15 @@ Two layers:
 """
 module NeuralBloch
 
+using SHA: SHA
+using TOML: TOML
+
 include("tensorrt/TensorRT.jl")
+include("model.jl")
 
 using .TensorRT: functional, versioninfo
 
-public functional, versioninfo
+export Model
+public BundleError, functional, versioninfo
 
 end
