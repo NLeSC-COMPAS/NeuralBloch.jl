@@ -16,17 +16,19 @@ Two layers:
 """
 module NeuralBloch
 
-using CUDACore: CUDACore, CuArray
+using CUDACore: CUDACore, CuArray, CuMatrix, DeviceMemory
 using SHA: SHA
 using TOML: TOML
 
 include("tensorrt/TensorRT.jl")
 include("model.jl")
 include("io.jl")
+include("predict.jl")
 
-using .TensorRT: functional, versioninfo
+using .TensorRT: functional, PrerequisiteError, CompileError, BuildError, TensorRTError
 
-export Model
-public BundleError, functional, versioninfo
+export Engine, Model, outputs, predict!, predict, checkdomain
+public ntr, domain, batchprofile, sequence, functional, versioninfo
+public BundleError, PrerequisiteError, CompileError, BuildError, TensorRTError
 
 end

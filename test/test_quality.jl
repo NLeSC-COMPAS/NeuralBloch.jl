@@ -16,5 +16,11 @@ end
 @testset "public names" begin
     # Every name a user may rely on. Adding or removing one is an API change
     # and must update this list.
-    @test Set(names(NeuralBloch)) == Set([:NeuralBloch, :BundleError, :Model, :functional, :versioninfo])
+@test Set(names(NeuralBloch)) == Set([
+    :NeuralBloch,
+    # exported
+    :Engine, :Model, :outputs, :predict!, :predict, :checkdomain,
+    # public, qualified
+    :ntr, :domain, :batchprofile, :sequence, :functional, :versioninfo,
+    :BundleError, :PrerequisiteError, :CompileError, :BuildError, :TensorRTError])
 end

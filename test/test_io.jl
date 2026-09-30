@@ -46,8 +46,10 @@ end
 
 tier(:T0, "io: input types") do
     @test input_problem(CuVector{Float32}) === nothing
-    view_type = SubArray{Float32,1,CuArray{Float32,1,DeviceMemory},Tuple{StepRange{Int,Int}},true}
-    @test input_problem(view_type) === nothing                     # views are fine: they are copied
+    strided = SubArray{Float32,1,CuArray{Float32,1,DeviceMemory},Tuple{StepRange{Int,Int}},false}
+    @test input_problem(strided) === nothing                       # views with a range are fine
+    indexed = SubArray{Float32,1,CuArray{Float32,1,DeviceMemory},Tuple{CuArray{Int,1,DeviceMemory}},false}
+    @test occursin("strided", input_problem(indexed))
     @test occursin("Float32", input_problem(CuVector{Float64}))
     @test occursin("CPU", input_problem(Vector{Float32}))
     @test occursin("not an array", input_problem(Float32))

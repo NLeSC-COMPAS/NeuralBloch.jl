@@ -79,10 +79,12 @@ end
     input_problem(T) -> Union{Nothing,String}
 
 `nothing` when vectors of type `T` can be inputs, otherwise what is wrong.
-Any GPU vector of Float32 will do, views included: inputs are copied.
+Any strided GPU vector of Float32 will do, views with a range included:
+predict! copies them with strided copies.
 """
-input_problem(::Type{<:CUDACore.AnyCuVector{Float32}}) = nothing
-input_problem(::Type{T}) where {T<:CUDACore.AnyCuArray} = "a $T; inputs must be GPU vectors of Float32"
+input_problem(::Type{<:CUDACore.StridedCuVector{Float32}}) = nothing
+input_problem(::Type{T}) where {T<:CUDACore.AnyCuArray} =
+    "a $T; inputs must be strided GPU vectors of Float32: a CuVector{Float32}, or a view of one with a range"
 input_problem(::Type{T}) where {T<:AbstractArray} =
     "a $T in CPU memory; inputs must be GPU vectors of Float32 (a CuVector{Float32})"
 input_problem(::Type{T}) where {T} = "a $T, not an array; inputs must be GPU vectors of Float32"
@@ -91,8 +93,8 @@ input_problem(::Type{T}) where {T} = "a $T, not an array; inputs must be GPU vec
     checkinputs(p) -> N
 
 The number of voxels in `p`, after checking the contract: properties `T₁`,
-`T₂`, `B₁` holding GPU vectors of Float32 of equal length. Otherwise an
-`ArgumentError`.
+`T₂`, `B₁` holding strided GPU vectors of Float32 (positive stride) of equal
+length. Otherwise an `ArgumentError`.
 """
 function checkinputs(p)
     for name in FEATURES
@@ -108,6 +110,9 @@ function checkinputs(p)
     N = length(T₁)
     length(T₂) == length(B₁) == N || throw(ArgumentError(
         "p.T₁, p.T₂ and p.B₁ have lengths $N, $(length(T₂)) and $(length(B₁)); they must be equal"))
+    for (name, s) in ((:T₁, stride(T₁, 1)), (:T₂, stride(T₂, 1)), (:B₁, stride(B₁, 1)))
+        s ≥ 1 || throw(ArgumentError("p.$name has stride $s; inputs must have a positive stride (copy it first)"))
+    end
     return N
 end
 
@@ -179,8 +184,9 @@ function checkoutputs(out::NamedTuple, ntr::Integer, N::Integer)
         problem = layout_problem(size(A), address(A), ntr, N)
         problem === nothing || throw(ArgumentError("out.$name is $problem"))
     end
-    problem = overlap_problem(keys(out), map(address, values(out)), ntr * N * sizeof(ComplexF32))
-    problem === nothing || throw(ArgumentError(problem))
+    # (A name of its own: reassigning a variable the closure above uses would box it.)
+    overlap = overlap_problem(keys(out), map(address, values(out)), ntr * N * sizeof(ComplexF32))
+    overlap === nothing || throw(ArgumentError(overlap))
     return nothing
 end
 

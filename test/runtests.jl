@@ -23,4 +23,5 @@ include("setup.jl")
     include("test_engine.jl")
     include("test_model.jl")
     include("test_io.jl")
+    include("test_predict.jl")
 end
