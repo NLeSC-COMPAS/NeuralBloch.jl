@@ -18,4 +18,5 @@ include("tiers.jl")
     include("test_quality.jl")
     include("test_system.jl")
     include("test_cache.jl")
+    include("test_compile.jl")
 end

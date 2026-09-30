@@ -335,6 +335,42 @@ function package_cuda(major::Integer)
     return nothing
 end
 
+# Install hints for `probs` (from problems(sys)), naming the packages the way
+# this system calls for them.
+function hints(sys::System, probs)
+    components = first.(probs)
+    lib, hdr = sys.nvinfer, sys.headers
+    major = lib !== nothing ? lib.version.major : hdr !== nothing ? hdr.version.major : first(MAJORS)
+    cuda = (:cuda_headers in components || :cuda_crt in components) ? package_cuda(major) : nothing
+    return hints(components; major, cuda)
+end
+
+"""
+    PrerequisiteError(msg)
+
+Something NeuralBloch needs from the system is missing. The message says
+what, and how to install it.
+"""
+struct PrerequisiteError <: Exception
+    msg::String
+end
+
+Base.showerror(io::IO, e::PrerequisiteError) = print(io, "PrerequisiteError: ", e.msg)
+
+"""
+    require(sys::System; gpu = true) -> System
+
+`sys`, if it has everything NeuralBloch needs (the GPU only with `gpu =
+true`); otherwise throw a [`PrerequisiteError`](@ref) listing what is
+missing and the commands that install it.
+"""
+function require(sys::System; gpu::Bool = true)
+    probs = problems(sys; gpu)
+    isempty(probs) && return sys
+    throw(PrerequisiteError(join(["NeuralBloch needs what this machine lacks:"; "  - " .* last.(probs)], '\n') *
+                            "\n\n" * hints(sys, probs)))
+end
+
 """
     versioninfo([io::IO], [sys::System])
 
@@ -357,9 +393,6 @@ function versioninfo(io::IO = stdout, sys::System = detect())
     isempty(probs) && return nothing
     println(io, "\nProblems:")
     foreach(p -> println(io, "  - ", p.second), probs)
-    components = first.(probs)
-    major = lib !== nothing ? lib.version.major : hdr !== nothing ? hdr.version.major : first(MAJORS)
-    cudav = (:cuda_headers in components || :cuda_crt in components) ? package_cuda(major) : nothing
-    print(io, "\n", hints(components; major, cuda = cudav))
+    print(io, "\n", hints(sys, probs))
     return nothing
 end

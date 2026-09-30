@@ -1,6 +1,8 @@
 [deps]
 Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
+Libdl = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
 NeuralBloch = "fc2c3a6e-ac2b-47d5-8560-37c768c6a653"
+TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [sources]
@@ -8,4 +10,6 @@ NeuralBloch = {path = ".."}
 
 [compat]
 Aqua = "0.8"
+Libdl = "1"
+TOML = "1"
 Test = "1"
