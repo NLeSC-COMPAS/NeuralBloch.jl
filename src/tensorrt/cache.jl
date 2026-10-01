@@ -1,11 +1,12 @@
 # The on-disk cache of compiled native code and built engines. Each entry is
 # a directory named after the digest of its key, holding the products and a
-# TOML manifest that records the key.
+# TOML manifest that records the key and each product's size.
 #
 # An entry is built in a temporary sibling directory and published with one
 # rename, so an entry directory is always complete. A lock per entry (a
 # FileWatching.Pidfile) makes concurrent Julia processes build it only once
-# (dev/NOTES.md, S8). Temporary names never equal an entry's name.
+# (dev/NOTES.md, S8). Temporary names never equal an entry's name, and carry
+# the pid of the process writing them.
 
 const MANIFEST = "manifest.toml"
 
@@ -58,11 +59,12 @@ end
 """
     write_manifest(dir, key, info)
 
-Write `dir/manifest.toml`: the entry's `key` and `info`, free-form facts
-about the build (a Dict or `nothing`).
+Write `dir/manifest.toml`: the entry's `key`, `info` (free-form facts about
+the build: a Dict or `nothing`) and the size of every file already in `dir`.
 """
 function write_manifest(dir::AbstractString, key::AbstractDict, info)
-    manifest = Dict{String,Any}("key" => key, "info" => something(info, Dict{String,Any}()))
+    files = Dict{String,Any}(f => filesize(joinpath(dir, f)) for f in readdir(dir) if f != MANIFEST)
+    manifest = Dict{String,Any}("key" => key, "info" => something(info, Dict{String,Any}()), "files" => files)
     open(io -> TOML.print(io, manifest; sorted = true), joinpath(dir, MANIFEST), "w")
     return nothing
 end
@@ -76,17 +78,25 @@ entrypath(root, key) = joinpath(root, digest(key)[1:16])
 
 The entry directory for `key` under `root`, or `nothing`. The manifest's
 recorded key must match, so neither a digest-prefix collision nor a
-hand-edited entry is taken for the product.
+hand-edited entry is taken for the product, and so must every product's
+size, so a damaged one (a power cut after the rename) is rebuilt.
 """
 function lookup(root::AbstractString, key::AbstractDict)
     dir = entrypath(root, key)
     isfile(joinpath(dir, MANIFEST)) || return nothing
-    recorded = try
-        read_manifest(dir)["key"]
+    manifest = try
+        read_manifest(dir)
     catch
         return nothing
     end
-    return digest(recorded) == digest(key) ? dir : nothing
+    digest(manifest["key"]) == digest(key) || return nothing
+    files = get(manifest, "files", nothing)
+    files isa AbstractDict || return nothing
+    for (f, size) in files
+        file = joinpath(dir, f)
+        isfile(file) && filesize(file) == size || return nothing
+    end
+    return dir
 end
 
 """
@@ -129,20 +139,46 @@ function getorbuild(build, root::AbstractString, key::AbstractDict; what::Abstra
     return withlock(path * ".lock", what) do
         existing = lookup(root, key)                  # built while we waited
         existing === nothing || return existing
-        # Holding the lock, nobody else writes this entry: anything here is a
-        # leftover (a killed build's temporary, an entry for other fields).
-        for f in readdir(root; join = true)
-            startswith(basename(f), basename(path) * ".tmp-") && rm(f; recursive = true, force = true)
+        # Holding the lock, anything here is a leftover: an entry for other
+        # fields, or the temporary of a builder that died. A live builder's
+        # temporary stays: its lock can have been taken for stale while it
+        # was stopped (Pidfile does so after 5 × STALE_AGE without a refresh).
+        prefix = basename(path) * ".tmp-"
+        for f in readdir(root)
+            startswith(f, prefix) && !alive(f, prefix) && rm(joinpath(root, f); recursive = true, force = true)
         end
         rm(path; recursive = true, force = true)
-        tmp = mktempdir(root; prefix = basename(path) * ".tmp-", cleanup = false)
+        tmp = mktempdir(root; prefix = prefix * "$(getpid())-", cleanup = false)
         try
             write_manifest(tmp, key, build(tmp))
-            Base.Filesystem.rename(tmp, path)
+            chmod(tmp, filemode(root) & 0o777)        # mktempdir's 0700 would lock other users out
         catch
             rm(tmp; recursive = true, force = true)
             rethrow()
         end
+        return publish(tmp, path, root, key)
+    end
+end
+
+# Whether the process that named temporary `name` (prefix * "<pid>-…") still
+# runs on this host.
+function alive(name, prefix)
+    m = match(r"^(\d+)-", name[length(prefix)+1:end])
+    m === nothing && return false
+    return ccall(:uv_kill, Cint, (Cint, Cint), parse(Int32, m[1]), 0) != Base.UV_ESRCH
+end
+
+# One rename publishes the entry. It fails only if the entry appeared while
+# we were building, published by a process that took our lock for stale
+# while we were stopped: theirs is as good as ours.
+function publish(tmp, path, root, key)
+    try
+        Base.Filesystem.rename(tmp, path)
         return path
+    catch
+        rm(tmp; recursive = true, force = true)
+        existing = lookup(root, key)
+        existing === nothing && rethrow()
+        return existing
     end
 end

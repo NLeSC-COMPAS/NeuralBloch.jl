@@ -102,6 +102,53 @@ tier(:T0, "cache: temporaries are never products") do
     end
 end
 
+tier(:T0, "cache: leftovers of live builders are kept") do
+    mktempdir() do root
+        key = engine_key(; KEY_FIELDS...)
+        final = joinpath(root, digest(key)[1:16])
+        dead = parse(Int, readchomp(`sh -c 'echo $$'`))         # a pid that has exited
+        mine = final * ".tmp-$(getpid())-live01"                  # a builder still running
+        gone = final * ".tmp-$dead-dead01"
+        mkpath.((mine, gone))
+        getorbuild(d -> (write(joinpath(d, "product"), "x"); nothing), root, key; what = "x")
+        @test isdir(mine) && !ispath(gone)
+    end
+end
+
+tier(:T0, "cache: an entry published meanwhile is reused") do
+    # A stopped lock holder can find its lock taken for stale and its entry
+    # built by another process when it resumes: the rename then fails, and
+    # the other process's entry, just as good, is the result.
+    mktempdir() do root
+        key = engine_key(; KEY_FIELDS...)
+        final = joinpath(root, digest(key)[1:16])
+        dir = getorbuild(root, key; what = "x") do d
+            mkpath(final)                                         # the other process publishes
+            write(joinpath(final, "product"), "theirs")
+            write_manifest(final, key, nothing)
+            write(joinpath(d, "product"), "ours")
+            nothing
+        end
+        @test dir == final
+        @test read(joinpath(dir, "product"), String) == "theirs"
+        @test readdir(root) == [basename(final)]                  # our temporary is gone
+    end
+end
+
+tier(:T0, "cache: a damaged entry is rebuilt") do
+    mktempdir() do root
+        key = engine_key(; KEY_FIELDS...)
+        builds = Ref(0)
+        build(d) = (builds[] += 1; write(joinpath(d, "product"), "complete"); nothing)
+        dir = getorbuild(build, root, key; what = "x")
+        @test filemode(dir) & 0o777 == filemode(root) & 0o777   # as readable as the cache itself
+        write(joinpath(dir, "product"), "")                       # e.g. lost in a power cut
+        @test lookup(root, key) === nothing
+        @test getorbuild(build, root, key; what = "x") == dir
+        @test builds[] == 2 && read(joinpath(dir, "product"), String) == "complete"
+    end
+end
+
 tier(:T0, "cache: an entry for other fields is replaced") do
     mktempdir() do root
         key = engine_key(; KEY_FIELDS...)
