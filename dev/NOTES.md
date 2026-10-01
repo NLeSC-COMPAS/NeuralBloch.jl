@@ -379,6 +379,43 @@ before first use. Result: all six checks pass.
 - First use took 3.8 minutes including all downloads; a second `Engine()` in
   the same session 0.03 s.
 
+## Review after task 12 (2026-10-01)
+
+An independent review of the finished code (a fresh agent; it reproduced
+most findings by running them) and a test run under CI's conditions (no GPU,
+no g++) found the defects below. Each fix has a test that failed before it.
+
+| Finding | Fix |
+|---|---|
+| `close(engine)` took no lock: closing while another thread was in `predict!` let TensorRT read freed memory, and two concurrent closes freed twice (abort) | The handle's pointer is `@atomic` and swapped out before `nb_close`; `close` takes the engine's lock and waits for the last claimed stream. A child `julia -t 3` races `predict!` against two closes |
+| `close(engine)` kept the engine's own input and sink buffers (183 MiB at 40000 voxels) | Freed by `close` too |
+| `predict` allocated outputs before checking the batch size: an oversized batch ran out of GPU memory instead of saying to chunk | Checked first (`batch_problem`, also reused by `predict!`) |
+| An empty batch was an error with impossible advice; a too-small batch was told to chunk | Empty batches do nothing; too small gets its own advice |
+| `checkdomain` compared Float32 inputs with Float64 bounds: the bounds themselves (`0.01f0 < 0.01`) were outside | Compared in the inputs' precision, bounds rounded outward |
+| A lock holder stopped for > 50 s lost its temporary to the next builder | Temporaries carry their writer's pid; only dead writers' are removed; a rename onto an entry published meanwhile returns that entry |
+| Entries were published 0700: unusable by other users of a shared depot | They take the cache root's mode |
+| A product damaged after publishing (power cut) was trusted forever | Manifests record product sizes, which `lookup` checks |
+| The native key omitted the compile flags; g++ could compile other headers (CPATH, `/usr/local/include`) than `detect()` found | The recipe is in the key; after compiling, the builder's own report must match the detected header and library versions |
+| An interrupt during a build left the builder running | It is killed |
+| `test_accuracy.jl` used a BlochSimulators macro, so the suite errored, instead of skipping, where T3 cannot run (CI) | The macro's expansion spelled out |
+
+Documented, not changed:
+
+- **Host waits when tasks alternate.** `pointer(A)` hands a CuArray to the
+  calling task's stream, and CUDA.jl synchronizes the previous owner stream
+  when that changes. So a `predict!` following one from another task waits
+  for that task's stream. This is what makes reusing the engine's buffers
+  across streams safe; the README and docstrings now say so. (`claim!`
+  still orders the TensorRT context's own scratch, which CUDA.jl knows
+  nothing about.)
+- **Aliased derivative outputs (D12)** remain: TensorRT's documentation
+  neither allows nor forbids binding two outputs to one buffer. Unlike
+  misalignment (D13), the worst case here only touches outputs the caller
+  discards. TensorRT writes outputs only into the buffers bound to them,
+  and places its intermediates in the context's scratch memory, never in a
+  user's buffer. The signal-only test checks bitwise equality with the full
+  run on every machine where the suite runs.
+
 ## Decisions
 
 Phase 0 settles the open questions below. Where the plan's "Decisions needed"

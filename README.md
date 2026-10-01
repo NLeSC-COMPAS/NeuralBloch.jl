@@ -94,7 +94,7 @@ allows TF32 on Ampere and newer GPUs. `Model(dir)` loads another bundle.
 | Outputs | Each output is an (NTR, N) `CuMatrix{ComplexF32}` indexed `[readout, voxel]`, at unit proton density. ∂T₁ and ∂T₂ are in physical units (per second), not scaled. |
 | Inputs | Properties `T₁`, `T₂`, `B₁` of `p`: strided GPU vectors of Float32 (a `CuVector`, or a view of one with a range) of equal length N, in physical units. |
 | Buffers | The caller owns `out`: `(; signal)` or `(; signal, ∂T₁, ∂T₂)`, no two overlapping, each 256-byte aligned as TensorRT requires. Whole arrays are; a column view `A[:, j:k]` is when `j - 1` is a multiple of 4. Addresses are bound on every call, so `out` may change from call to call. Without derivatives, they go to scratch memory the engine owns. |
-| Asynchrony | Everything is queued on the calling task's stream, results appear in stream order, and nothing synchronizes the host. That is why `predict!` does not check the domain: `checkdomain` does, and synchronizes. Several tasks may share one engine. |
+| Asynchrony | Everything is queued on the calling task's stream, results appear in stream order, and a call does not wait for the GPU. That is why `predict!` does not check the domain: `checkdomain` does, and synchronizes. Several tasks may share one engine; a call following one from another task first waits for that task's stream, as the engine's buffers change hands. |
 | Errors | Every contract violation is an `ArgumentError`, thrown before anything is queued. A batch outside `batchprofile(engine)` is one: chunk the batch (column views of `out`), or build an engine for it. |
 | Allocation | After warm-up, `predict!` allocates nothing, neither on the host nor on the GPU. |
 

@@ -145,11 +145,13 @@ derivatives, writing them into `out` in place.
 - `N` must be in [`batchprofile(engine)`](@ref), or 0 (then nothing happens).
 
 Asynchronous: everything is queued on the calling task's stream and ready
-in stream order, with no host synchronization (so it does not check the
-training domain; see [`checkdomain`](@ref)). Keep `out` and `p` alive until
-the results are used. Every contract violation is an `ArgumentError`, thrown
-before anything is queued. After warm-up it allocates nothing, on the host
-or the GPU.
+in stream order, without waiting for the GPU (so it does not check the
+training domain; see [`checkdomain`](@ref)). One exception: when the
+previous call came from another task, this one first waits for that task's
+stream, since the engine's buffers change hands. Keep `out` and `p` alive
+until the results are used. Every contract violation is an `ArgumentError`,
+thrown before anything is queued. After warm-up it allocates nothing, on
+the host or the GPU.
 """
 function predict!(out, engine::Engine, p)
     N = checkcall(engine, p)
