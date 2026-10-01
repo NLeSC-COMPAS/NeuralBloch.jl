@@ -57,11 +57,18 @@ csrc_hash(dir::AbstractString = csrc_dir()) =
     digest(Dict(name => bytes2hex(SHA.sha256(read(joinpath(dir, name))))
                 for name in readdir(dir) if isfile(joinpath(dir, name))))
 
+# How g++ is called, apart from paths: part of the key, so a package update
+# that changes only a flag still recompiles.
+const CXXFLAGS = ["-std=c++17", "-O2", "-Wall", "-Wextra", "-fvisibility=hidden", "-fvisibility-inlines-hidden"]
+const LIBFLAGS = ["-fPIC", "-shared"]          # plus -Wl,--version-script=exports.map
+const LDFLAGS = ["-Wl,--no-undefined"]
+
 native_key(sys::System, csrc) = Dict{String,Any}(
     "csrc_sha256" => csrc_hash(csrc),
     "tensorrt" => vstring(sys.nvinfer.version),
     "tensorrt_headers" => vstring(sys.headers.version),
     "compiler" => "g++ $(sys.compiler.version)",
+    "recipe" => join([CXXFLAGS; LIBFLAGS; "-Wl,--version-script"; LDFLAGS], ' '),
     "arch" => string(Sys.ARCH),
 )
 
@@ -81,16 +88,30 @@ default_includes() = ("/usr/include", "/usr/include/$(Sys.ARCH)-linux-gnu")
 function gxx(sys::System, src, dir, name; shared::Bool)
     includes = [["-isystem", d] for d in (sys.headers.dir, sys.cuda.dir) if !(d in default_includes())]
     major = sys.nvinfer.version.major
-    kind = shared ? ["-fPIC", "-shared", "-Wl,--version-script=" * joinpath(dirname(src), "exports.map")] :
-                    String[]
+    kind = shared ? [LIBFLAGS; "-Wl,--version-script=" * joinpath(dirname(src), "exports.map")] : String[]
     libs = ["-l:libnvinfer.so.$major"; shared ? String[] : ["-l:libnvonnxparser.so.$major"]]
-    cmd = `$(sys.compiler.path) -std=c++17 -O2 -Wall -Wextra -fvisibility=hidden
-           -fvisibility-inlines-hidden $kind $(reduce(vcat, includes; init = String[])) $src -o $name
-           -L$(dirname(sys.nvinfer.path)) $libs -Wl,--no-undefined`
+    cmd = `$(sys.compiler.path) $CXXFLAGS $kind $(reduce(vcat, includes; init = String[])) $src -o $name
+           -L$(dirname(sys.nvinfer.path)) $libs $LDFLAGS`
     output = IOBuffer()
     p = run(pipeline(ignorestatus(Cmd(cmd; dir)); stdout = output, stderr = output))
     success(p) || throw(CompileError(cmd, String(take!(output)), vstring(sys.nvinfer.version)))
     return cmd
+end
+
+# g++ searches CPATH and /usr/local/include before the system's include
+# directories, so another TensorRT's headers there would be compiled instead
+# of the ones detect() found (and the key records). The builder reports what
+# it was compiled against and runs with.
+function check_versions(sys::System, builder)
+    report = TOML.parse(read(`$builder --version`, String))
+    want = (vstring(sys.headers.version), vstring(sys.nvinfer.version))
+    got = (report["tensorrt_header"], report["tensorrt_library"])
+    got == want && return nothing
+    throw(PrerequisiteError(
+        "the C++ code was compiled against TensorRT $(got[1]) headers and runs with library $(got[2]), " *
+        "but the system's are $(want[1]) in $(sys.headers.dir) and $(want[2]) at $(sys.nvinfer.path). " *
+        "Another TensorRT comes first on g++'s include path (CPATH, CPLUS_INCLUDE_PATH, /usr/local/include) " *
+        "or on the library path (LD_LIBRARY_PATH): remove it from there."))
 end
 
 """
@@ -113,6 +134,7 @@ function compile(sys::System = detect(); csrc::AbstractString = csrc_dir(),
         t = time()
         library = gxx(sys, joinpath(csrc, "engine.cpp"), tmp, LIBRARY; shared = true)
         builder = gxx(sys, joinpath(csrc, "builder.cpp"), tmp, BUILDER; shared = false)
+        check_versions(sys, joinpath(tmp, BUILDER))
         return Dict{String,Any}("library_command" => sprint(show, library),
                                 "builder_command" => sprint(show, builder),
                                 "seconds" => round(time() - t; digits = 2))

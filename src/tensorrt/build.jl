@@ -78,8 +78,14 @@ function run_builder(native::Native, onnx::AbstractString, out::AbstractString,
         timedout[] = process_running(p)
         timedout[] && kill(p, Base.SIGKILL)
     end
-    wait(p)
-    close(watchdog)
+    try
+        wait(p)
+    catch                                       # an interrupt must not leave the builder running
+        kill(p, Base.SIGKILL)
+        rethrow()
+    finally
+        close(watchdog)
+    end
     success(p) && return TOML.parse(String(take!(report)))
 
     why = timedout[] ? "the builder did not finish within $timeout s and was stopped" :

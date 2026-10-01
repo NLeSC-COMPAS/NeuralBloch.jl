@@ -31,6 +31,16 @@ tier(:T0, "compile: missing prerequisites") do
     end
 end
 
+tier(:T0, "compile: the recipe is part of the key") do
+    lib = TensorRT.Library("/usr/lib/libnvinfer.so.11", v"11.2.1+2")
+    sys = TensorRT.System(lib, lib, TensorRT.Headers("/usr/include", v"11.2.1+2"),
+                          TensorRT.CUDAHeaders("/usr/local/cuda/include", true),
+                          TensorRT.Compiler("/usr/bin/g++", v"13.3.0"), nothing, "")
+    key = TensorRT.native_key(sys, csrc_dir())
+    @test occursin("-O2", key["recipe"]) && occursin("-fvisibility=hidden", key["recipe"])
+    @test sort(collect(keys(key))) == ["arch", "compiler", "csrc_sha256", "recipe", "tensorrt", "tensorrt_headers"]
+end
+
 tier(:T0, "compile: source hash") do
     mktempdir() do dir
         src = csrc_copy(dir)
@@ -96,6 +106,23 @@ tier(:T1, "compile: cached by source") do
         c = @test_logs (:info, r"Compiling") match_mode = :any compile(; csrc = src, root)
         @test c.dir != a.dir
         @test isfile(c.library) && isfile(c.builder)
+    end
+end
+
+tier(:T1, "compile: the headers g++ uses must be TensorRT's") do
+    # As if another TensorRT's headers came first on g++'s include path
+    # (CPATH, /usr/local/include): what g++ compiled against is not what
+    # detect() found. Same major.minor, so detection itself has no objection.
+    sys = TensorRT.detect()
+    v = sys.headers.version
+    other = TensorRT.System(sys.nvinfer, sys.onnxparser,
+                            TensorRT.Headers(sys.headers.dir, VersionNumber(v.major, v.minor, v.patch + 1, (), v.build)),
+                            sys.cuda, sys.compiler, sys.gpu, sys.gpu_error)
+    mktempdir() do root
+        err = @test_throws PrerequisiteError compile(other; root)
+        msg = sprint(showerror, err.value)
+        @test occursin(TensorRT.vstring(v), msg) && occursin("CPATH", msg)
+        @test no_entries(root)
     end
 end
 

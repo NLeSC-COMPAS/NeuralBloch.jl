@@ -38,6 +38,16 @@ tier(:T1, "build: a hung builder is stopped") do
                                                              timeout = 1)
         @test occursin("did not finish within 1 s", sprint(showerror, err.value))
         @test t < 30
+
+        # Interrupted (Ctrl-C in a notebook reaches only Julia): the builder
+        # must not be left running.
+        hang = joinpath(dir, "hang")
+        task = @async run_builder(native, ONNX, joinpath(dir, "out"), BuildSettings(), gpu; timeout = 600)
+        while !success(pipeline(`pgrep -f $hang`; stdout = devnull)); sleep(0.05); end
+        schedule(task, InterruptException(); error = true)
+        @test_throws TaskFailedException wait(task)
+        sleep(0.5)
+        @test !success(pipeline(`pgrep -f $hang`; stdout = devnull))
     end
 end
 
