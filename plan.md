@@ -1,6 +1,6 @@
 # NeuralBloch.jl development plan
 
-> Status: draft (2026-09-30); implementation has not started.
+> Status: implemented (2026-10-01). Phase 0 and tasks 1–12 are done, one commit each. `dev/NOTES.md` holds the measurements and the decisions they led to (D1–D19); `README.md` documents the final API.
 
 ## Goal
 
@@ -343,13 +343,13 @@ close(engine)
 
 | # | Decision | Recommendation | Status |
 |---|---|---|---|
-| 1 | Where the bundle lives. Upstream has published nothing and the repository is private, so `Artifacts.toml` has no usable download URL for now. Downloading a private release would need a token, so `Pkg` would fail to download it | For v1, put the bundle directly into the package's git repository under `models/`: the ONNX (1.05 MB), plus the card and RF tables. The card records the sha256, which is verified at load time. Switch to Artifacts later, when the bundle grows or several models must be supported | Open |
-| 2 | Who writes the card | For v1, write it by hand in this package, with the source of every field (file and line). At the same time, propose a small upstream change: have `export_onnx.py` generate the card during export, and treat the upstream card as authoritative from then on | Open |
-| 3 | TF32 | Off by default (accuracy first), and part of the cache key as a build setting. Decide whether to allow turning it on after measuring on an Ampere or newer GPU | Open |
-| 4 | Where the headers come from | Accept only the deb/rpm -dev packages, and drop the fallback of fetching TensorRT headers from GitHub. Reasons: the parser library has to be installed via apt anyway, and the CUDA headers cannot be fetched from GitHub in the first place | Open |
-| 5 | Depend on CUDACore or CUDA.jl | CUDACore, already measured to be sufficient. The cost: MRSTAT will later have to tighten its CUDA compat to 6.x, otherwise one environment could end up with two mutually incompatible `CuArray` types | Open |
-| 6 | Julia compat | 1.12: the same as MRSTAT, and the only version tested | Open |
-| 7 | Where the repository lives, and who can see it | Locally at `../NeuralBloch.jl`. Which GitHub organization, and public or private, is not decided yet; this affects decision 1 | Open |
+| 1 | Where the bundle lives. Upstream has published nothing and the repository is private, so `Artifacts.toml` has no usable download URL for now. Downloading a private release would need a token, so `Pkg` would fail to download it | For v1, put the bundle directly into the package's git repository under `models/`: the ONNX (1.05 MB), plus the card and RF tables. The card records the sha256, which is verified at load time. Switch to Artifacts later, when the bundle grows or several models must be supported | Adopted (`dev/NOTES.md`, D1) |
+| 2 | Who writes the card | For v1, write it by hand in this package, with the source of every field (file and line). At the same time, propose a small upstream change: have `export_onnx.py` generate the card during export, and treat the upstream card as authoritative from then on | Adopted for v1 (D2); proposing the upstream change is still open |
+| 3 | TF32 | Off by default (accuracy first), and part of the cache key as a build setting. Decide whether to allow turning it on after measuring on an Ampere or newer GPU | Adopted (D3); the measurement on an Ampere or newer GPU is still open |
+| 4 | Where the headers come from | Accept only the deb/rpm -dev packages, and drop the fallback of fetching TensorRT headers from GitHub. Reasons: the parser library has to be installed via apt anyway, and the CUDA headers cannot be fetched from GitHub in the first place | Adopted (D4) |
+| 5 | Depend on CUDACore or CUDA.jl | CUDACore, already measured to be sufficient. The cost: MRSTAT will later have to tighten its CUDA compat to 6.x, otherwise one environment could end up with two mutually incompatible `CuArray` types | Adopted (D5) |
+| 6 | Julia compat | 1.12: the same as MRSTAT, and the only version tested | Adopted (D6) |
+| 7 | Where the repository lives, and who can see it | Locally at `../NeuralBloch.jl`. Which GitHub organization, and public or private, is not decided yet; this affects decision 1 | Local only (D7); the GitHub home is still open |
 
 ## Out of scope for v1
 
@@ -408,3 +408,12 @@ The engine alone (host submission time in parentheses):
 
 - 2026-09-30: first draft.
 - 2026-09-30: the two benchmark scripts of appendix A were moved into `dev/spikes/`.
+- 2026-10-01: implemented. What the implementation changed or added, each with its evidence in `dev/NOTES.md`:
+  - the CUDA headers also need `cuda-crt`, which `cuda-cudart-dev` does not pull in (S1);
+  - the default profile is 1/14400/40000, and `Engine(model; batch)` builds others (S4);
+  - `out` must be 256-byte aligned, as TensorRT documents; this refines "any address" in the contract. Whole arrays always are, and so are column views starting at a multiple of 4 voxels (S6, D13);
+  - inputs must be strided GPU vectors, because staging uses strided copies. A spike added after Phase 0 (S10) measured that only strided copies stage without allocating;
+  - `checkdomain` checks whichever of T₁, T₂, B₁ `p` has, on GPU or CPU vectors;
+  - public metadata queries `ntr`, `domain`, `batchprofile`, `sequence`, and the error types;
+  - `predict!` on this machine: bitwise equal to MRSTAT's engine, 1.27–1.30 ms at 14400 voxels, zero allocation (task 10); installs into an empty depot and works there (task 11).
+- 2026-10-01: an independent review of the finished code found eleven defects, among them a crash when `close` raced `predict!`. All are fixed, each with a test that failed before the fix (`dev/NOTES.md`, "Review after task 12").
