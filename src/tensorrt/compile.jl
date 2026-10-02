@@ -2,8 +2,8 @@
 # and the neuralbloch-build executable from builder.cpp, once per source
 # content, TensorRT version and compiler.
 
-const LIBRARY = "libneuralbloch.so"
-const BUILDER = "neuralbloch-build"
+const NB_TRT_INFER_LIB = "libneuralbloch.so"
+const NB_TRT_BUILDER_EXE = "neuralbloch-build"
 
 """
     Native(dir, csrc)
@@ -19,7 +19,7 @@ struct Native
     csrc::String
 end
 
-Native(dir::AbstractString, csrc::AbstractString) = Native(dir, joinpath(dir, LIBRARY), joinpath(dir, BUILDER), csrc)
+Native(dir::AbstractString, csrc::AbstractString) = Native(dir, joinpath(dir, NB_TRT_INFER_LIB), joinpath(dir, NB_TRT_BUILDER_EXE), csrc)
 
 """
     CompileError(cmd, output, tensorrt)
@@ -65,11 +65,12 @@ const LDFLAGS = ["-Wl,--no-undefined"]
 
 native_key(sys::System, csrc) = Dict{String,Any}(
     "csrc_sha256" => csrc_hash(csrc),
+    "arch" => string(Sys.ARCH),
     "tensorrt" => vstring(sys.nvinfer.version),
     "tensorrt_headers" => vstring(sys.headers.version),
     "compiler" => "g++ $(sys.compiler.version)",
     "recipe" => join([CXXFLAGS; LIBFLAGS; "-Wl,--version-script"; LDFLAGS], ' '),
-    "arch" => string(Sys.ARCH),
+    "outputs" => "$NB_TRT_INFER_LIB $NB_TRT_BUILDER_EXE",
 )
 
 # The directories g++ searches by itself. Passing one of them again with
@@ -132,9 +133,9 @@ function compile(sys::System = detect(); csrc::AbstractString = csrc_dir(),
         @info "Compiling NeuralBloch's C++ code against TensorRT $(vstring(sys.nvinfer.version)) " *
               "(once per TensorRT version and source change)."
         t = time()
-        library = gxx(sys, joinpath(csrc, "engine.cpp"), tmp, LIBRARY; shared = true)
-        builder = gxx(sys, joinpath(csrc, "builder.cpp"), tmp, BUILDER; shared = false)
-        check_versions(sys, joinpath(tmp, BUILDER))
+        library = gxx(sys, joinpath(csrc, "engine.cpp"), tmp, NB_TRT_INFER_LIB; shared = true)
+        builder = gxx(sys, joinpath(csrc, "builder.cpp"), tmp, NB_TRT_BUILDER_EXE; shared = false)
+        check_versions(sys, joinpath(tmp, NB_TRT_BUILDER_EXE))
         return Dict{String,Any}("library_command" => sprint(show, library),
                                 "builder_command" => sprint(show, builder),
                                 "seconds" => round(time() - t; digits = 2))
