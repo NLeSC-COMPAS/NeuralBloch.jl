@@ -7,7 +7,7 @@
 #     julia --project=scripts dev/compare_mrstat.jl
 #
 # Reads ../MRSTAT.jl/models/model.engine and writes nothing. MRSTAT's engine
-# runs through this package's own TensorRT layer: libneuralbloch.so opens any
+# runs through this package's own TensorRT layer: libnb-trtinfer.so opens any
 # engine of the installed TensorRT version.
 
 using NeuralBloch

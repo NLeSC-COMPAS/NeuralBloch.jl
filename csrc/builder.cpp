@@ -1,9 +1,9 @@
-// builder.cpp — neuralbloch-build, a standalone executable that turns an ONNX
+// builder.cpp — nb-trt-build, a standalone executable that turns an ONNX
 // model into a serialized TensorRT engine. Julia runs it as a subprocess, so a
 // crash or a hang in TensorRT's builder cannot take the Julia session down.
 //
-//     neuralbloch-build --onnx FILE --output FILE --batch MIN,OPT,MAX --tf32 0|1 --optlevel N
-//     neuralbloch-build --version
+//     nb-trt-build --onnx FILE --output FILE --batch MIN,OPT,MAX --tf32 0|1 --optlevel N
+//     nb-trt-build --version
 //
 // Every build setting is applied explicitly, never left to TensorRT's
 // defaults, and read back into the report:
@@ -51,7 +51,7 @@ struct Options {
 };
 
 int fail(int code, const char* format, ...) {
-    std::fprintf(stderr, "neuralbloch-build: ");
+    std::fprintf(stderr, "nb-trt-build: ");
     va_list args;
     va_start(args, format);
     std::vfprintf(stderr, format, args);

@@ -29,7 +29,7 @@ end
 
 tier(:T1, "build: a hung builder is stopped") do
     mktempdir() do dir
-        # A stand-in for neuralbloch-build that never finishes.
+        # A stand-in for nb-trt-build that never finishes.
         write(joinpath(dir, "hang.cpp"), "#include <unistd.h>\nint main() { for (;;) pause(); }\n")
         run(`g++ -o $(joinpath(dir, "hang")) $(joinpath(dir, "hang.cpp"))`)
         native = TensorRT.Native(dir, "", joinpath(dir, "hang"), "")

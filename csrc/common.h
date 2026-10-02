@@ -1,5 +1,5 @@
-// common.h — shared by engine.cpp (the runtime library, libneuralbloch.so)
-// and builder.cpp (the builder executable, neuralbloch-build): TensorRT's
+// common.h — shared by engine.cpp (the runtime library, libnb-trtinfer.so)
+// and builder.cpp (the builder executable, nb-trt-build): TensorRT's
 // logger, the error slot, versions.
 //
 // Rules for everything in csrc/:

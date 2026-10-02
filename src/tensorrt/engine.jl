@@ -1,12 +1,12 @@
 # Running engines: a Handle is one engine with one execution context, driven
-# through libneuralbloch.so (engine.cpp). Shapes and addresses are set per
+# through libnb-trtinfer.so (engine.cpp). Shapes and addresses are set per
 # run, so outputs can live anywhere; nothing here allocates on the hot path.
 
 # TensorRT's DataType enum → Julia element type (types Julia lacks map to nothing).
 const ELTYPES = Dict{Int32,DataType}(0 => Float32, 1 => Float16, 2 => Int8, 3 => Int32, 4 => Bool,
                                      5 => UInt8, 8 => Int64)
 
-# libneuralbloch.so's entry points, looked up once per library.
+# libnb-trtinfer.so's entry points, looked up once per library.
 struct API
     last_error::Ptr{Cvoid}
     open::Ptr{Cvoid}

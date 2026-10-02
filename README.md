@@ -106,7 +106,7 @@ the package's C++ changed:
 1. It checks the system (as `NeuralBloch.versioninfo()` does) and throws a
    `PrerequisiteError` with the install commands if something is missing.
 2. It compiles the package's C++ against the installed TensorRT with g++,
-   into `libneuralbloch.so` and the `neuralbloch-build` executable (about two
+   into `libnb-trtinfer.so` and the `nb-trt-build` executable (about two
    seconds), announced with one line.
 3. It verifies the bundled ONNX against the sha256 its card pins, and builds
    the engine for your GPU in a subprocess (about 5 seconds and 0.5 GiB of GPU

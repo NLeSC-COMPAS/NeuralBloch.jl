@@ -1,4 +1,4 @@
-/* Linker version script for libneuralbloch.so: export the extern "C" API and
+/* Linker version script for libnb-trtinfer.so: export the extern "C" API and
    nothing else. -fvisibility=hidden alone is not enough: libstdc++ declares
    namespace std with default visibility, so template instantiations (e.g.
    std::vector growth) would be exported and could interpose on the

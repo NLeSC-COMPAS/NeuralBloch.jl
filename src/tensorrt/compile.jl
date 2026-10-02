@@ -1,9 +1,9 @@
-# Compiling csrc/ with g++ into the cache: libneuralbloch.so from engine.cpp
-# and the neuralbloch-build executable from builder.cpp, once per source
+# Compiling csrc/ with g++ into the cache: libnb-trtinfer.so from engine.cpp
+# and the nb-trt-build executable from builder.cpp, once per source
 # content, TensorRT version and compiler.
 
-const NB_TRT_INFER_LIB = "libneuralbloch.so"
-const NB_TRT_BUILDER_EXE = "neuralbloch-build"
+const NB_TRT_INFER_LIB = "libnb-trtinfer.so"
+const NB_TRT_BUILDER_EXE = "nb-trt-build"
 
 """
     Native(dir, csrc)
@@ -118,7 +118,7 @@ end
 """
     compile([sys]; csrc = csrc_dir(), root) -> Native
 
-`libneuralbloch.so` and `neuralbloch-build`, compiled from `csrc` against
+`libnb-trtinfer.so` and `nb-trt-build`, compiled from `csrc` against
 the system's TensorRT with g++: from the cache (`root`, by default in
 [`cache_root`](@ref)) when the same sources were compiled before with the
 same TensorRT and compiler. Throws a [`PrerequisiteError`](@ref) when the

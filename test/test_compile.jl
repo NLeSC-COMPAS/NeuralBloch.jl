@@ -4,7 +4,7 @@ using NeuralBloch.TensorRT: compile, csrc_dir, csrc_hash, CompileError, Prerequi
 using Libdl: Libdl
 using TOML: TOML
 
-# Every symbol libneuralbloch.so exports; everything else is hidden.
+# Every symbol libnb-trtinfer.so exports; everything else is hidden.
 const EXPORTS = ["nb_close", "nb_device_memory", "nb_enqueue", "nb_header_version", "nb_io_count",
                  "nb_io_dtype", "nb_io_is_input", "nb_io_name", "nb_io_profile", "nb_io_shape",
                  "nb_last_error", "nb_library_version", "nb_open", "nb_set_address", "nb_set_shape"]

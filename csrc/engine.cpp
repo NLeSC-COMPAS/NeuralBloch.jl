@@ -1,4 +1,4 @@
-// engine.cpp — libneuralbloch.so, the runtime side: Julia ccalls into it to
+// engine.cpp — libnb-trtinfer.so, the runtime side: Julia ccalls into it to
 // open serialized engines and run them. No CUDA graph (dev/NOTES.md, S9).
 //
 // A handle owns one engine and one execution context. The context allocates

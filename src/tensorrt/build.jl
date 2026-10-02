@@ -1,4 +1,4 @@
-# Building engines: neuralbloch-build runs as a subprocess, its product goes
+# Building engines: nb-trt-build runs as a subprocess, its product goes
 # into the cache under the engine's key (cache.jl).
 
 const ENGINE_FILE = "model.engine"
@@ -46,7 +46,7 @@ end
 
 Base.showerror(io::IO, e::BuildError) = print(io, "BuildError: ", e.msg)
 
-# What each exit code of neuralbloch-build means (see builder.cpp).
+# What each exit code of nb-trt-build means (see builder.cpp).
 const BUILDER_EXITS = Dict(
     1 => "the builder rejected its arguments (a bug in NeuralBloch)",
     2 => "the ONNX parser rejected the model",
@@ -111,7 +111,7 @@ sources; otherwise built now, announced with one line (it takes seconds).
 
 Building compiles the C++ first when needed ([`compile`](@ref)), returns
 the memory CUDA.jl's pool holds to the driver (the builder is another process
-and would not see it otherwise), and runs `neuralbloch-build` as a
+and would not see it otherwise), and runs `nb-trt-build` as a
 subprocess. Throws a [`PrerequisiteError`](@ref) when the system lacks
 something, a [`BuildError`](@ref) when the build fails.
 """
