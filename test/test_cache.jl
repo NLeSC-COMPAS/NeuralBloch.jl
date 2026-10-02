@@ -4,6 +4,7 @@ using NeuralBloch.TensorRT: digest, engine_key, lookup, getorbuild, withlock,
                             read_manifest, write_manifest
 
 const KEY_FIELDS = (onnx = "3b1645293d530c15f25b8b6b858a3b7fb9ab6e1b8739a40627d8385d516bf607",
+                    output = "model.engine",
                     tensorrt = v"11.2.1+2", gpu = "NVIDIA GeForce RTX 2080 Ti", capability = v"7.5",
                     settings = Dict("min" => 1, "opt" => 14400, "max" => 40000, "tf32" => false, "optlevel" => 3),
                     csrc = "c0ffee")
@@ -16,7 +17,8 @@ tier(:T0, "cache: keys") do
     @test digest(Dict(reverse(collect(k)))) == digest(k)
 
     # Every input changes the key, including every build setting.
-    changed = [(; KEY_FIELDS..., onnx = "0" ^ 64), (; KEY_FIELDS..., tensorrt = v"11.2.1+3"),
+    changed = [(; KEY_FIELDS..., onnx = "0" ^ 64), (; KEY_FIELDS..., output = "renamed.engine"),
+               (; KEY_FIELDS..., tensorrt = v"11.2.1+3"),
                (; KEY_FIELDS..., tensorrt = v"11.3.0+1"), (; KEY_FIELDS..., gpu = "NVIDIA A100"),
                (; KEY_FIELDS..., capability = v"8.6"), (; KEY_FIELDS..., csrc = "c0ffef")]
     for s in ("min" => 2, "opt" => 1000, "max" => 65536, "tf32" => true, "optlevel" => 5)
@@ -27,6 +29,7 @@ tier(:T0, "cache: keys") do
 
     # The key records every input in readable form.
     @test k["tensorrt"] == "11.2.1.2"
+    @test k["output"] == "model.engine"
     @test k["compute_capability"] == "7.5"
     @test k["settings"]["opt"] == 14400
 end
@@ -191,7 +194,7 @@ tier(:T0, "cache: two processes, one build") do
         # counter file and takes long enough for the two to overlap.
         code = """
         using NeuralBloch.TensorRT: getorbuild, engine_key
-        key = engine_key(; onnx = "x", tensorrt = v"11.2.1+2", gpu = "g", capability = v"7.5",
+        key = engine_key(; onnx = "x", output = "product", tensorrt = v"11.2.1+2", gpu = "g", capability = v"7.5",
                          settings = Dict("opt" => 1), csrc = "c")
         dir = getorbuild($(repr(root)), key; what = "the race product") do d
             open(io -> println(io, getpid()), $(repr(counter)), "a")

@@ -119,7 +119,8 @@ function build(onnx::AbstractString; settings::BuildSettings = BuildSettings(), 
                root::AbstractString = joinpath(cache_root(), "engines"))
     require(sys)
     native = compile(sys)
-    key = engine_key(; onnx = bytes2hex(open(SHA.sha256, onnx)), tensorrt = sys.nvinfer.version,
+    key = engine_key(; onnx = bytes2hex(open(SHA.sha256, onnx)), output = ENGINE_FILE,
+                     tensorrt = sys.nvinfer.version,
                      gpu = sys.gpu.name, capability = sys.gpu.capability,
                      settings = settings_dict(settings), csrc = native.csrc)
     dir = getorbuild(root, key; what = "a TensorRT engine for $(sys.gpu.name)") do tmp

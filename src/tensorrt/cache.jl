@@ -37,17 +37,18 @@ function digest(fields::AbstractDict)
 end
 
 """
-    engine_key(; onnx, tensorrt, gpu, capability, settings, csrc) -> Dict
+    engine_key(; onnx, output, tensorrt, gpu, capability, settings, csrc) -> Dict
 
-Everything that determines an engine: the ONNX's sha256, TensorRT's version
+Everything that determines an engine: the ONNX's sha256, the output filename, TensorRT's version
 (all four fields; an engine is tied to the exact library that built it), the
 GPU's name and compute capability, the build settings, and the sha256 of the
 C++ sources the builder is compiled from.
 """
-function engine_key(; onnx::AbstractString, tensorrt::VersionNumber, gpu::AbstractString,
+function engine_key(; onnx::AbstractString, output::AbstractString, tensorrt::VersionNumber, gpu::AbstractString,
                     capability::VersionNumber, settings::AbstractDict, csrc::AbstractString)
     return Dict{String,Any}(
         "onnx_sha256" => String(onnx),
+        "output" => String(output),
         "tensorrt" => vstring(tensorrt),
         "gpu" => String(gpu),
         "compute_capability" => "$(capability.major).$(capability.minor)",
