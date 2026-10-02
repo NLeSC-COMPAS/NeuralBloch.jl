@@ -1,7 +1,7 @@
 # Building engines: neuralbloch-build runs as a subprocess, its product goes
 # into the cache under the engine's key (cache.jl).
 
-const ENGINE_FILE = "engine.plan"
+const ENGINE_FILE = "model.engine"
 
 """
     BuildSettings(; batch = (1, 14400, 40000), tf32 = false, optlevel = 3)
