@@ -61,7 +61,7 @@ tier(:T2, "build: engine from the bundled ONNX, cached") do
         m = read_manifest(dirname(path))
         key = m["key"]
         @test sort(collect(keys(key))) ==
-              ["compute_capability", "csrc_sha256", "gpu", "onnx_sha256", "settings", "tensorrt"]
+              ["compute_capability", "csrc_sha256", "gpu", "onnx_sha256", "output", "settings", "tensorrt"]
         @test key["onnx_sha256"] == bytes2hex(open(sha256, ONNX))
         @test key["tensorrt"] == vstring(sys.nvinfer.version)
         @test key["gpu"] == sys.gpu.name
