@@ -123,6 +123,31 @@ Julia session (CUDA and TensorRT starting up), milliseconds after that. The
 engine's execution context holds about 11 KiB of GPU scratch per voxel of the
 batch range's maximum: 440 MiB at the default.
 
+### Run compilation or build TensorRT engine yourself
+
+You do not need to run these commands for normal use: `Engine()` compiles the
+C++ and builds the engine automatically when needed. To invoke either step
+yourself, start Julia in the package environment (`julia --project`) and run:
+
+```julia
+using NeuralBloch
+trt = NeuralBloch.TensorRT
+
+# Compile csrc/ to runtime library and builder
+native = trt.compile()
+@show native.library native.builder
+
+# Build TensorRT engine from model.onnx
+settings = trt.BuildSettings()
+engine_path = trt.build("models/model.onnx"; settings)
+@show engine_path
+```
+
+`compile()` needs the TensorRT development files and `g++`, but not a GPU.
+`build()` needs a working TensorRT setup and GPU; it also calls `compile()`
+automatically, so run `compile()` separately only when you want to build the
+native artifacts on their own. Both steps reuse their cache when possible.
+
 ## Accuracy
 
 Against the generator of the training data, BlochSimulators.jl 0.9's FISP3D
