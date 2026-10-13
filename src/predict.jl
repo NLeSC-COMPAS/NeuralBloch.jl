@@ -40,7 +40,7 @@ function Engine(model::Model = Model(); batch = (1, 14400, 40000), tf32::Bool = 
     sys = TensorRT.detect()
     handle = TensorRT.Handle(TensorRT.build(model.onnx; settings, sys); native = TensorRT.compile(sys))
     io = try
-        bindings(TensorRT.tensors(handle), model.ntr)
+        resolve_io(TensorRT.tensors(handle), model.ntr)
     catch
         close(handle)
         rethrow()

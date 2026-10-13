@@ -89,7 +89,7 @@ Goal: open the engine once, then run it for every call.
 | `src/tensorrt/compile.jl` | Supplies `Native.library`, which `Handle` loads. |
 | `src/tensorrt/engine.jl` | `Handle` loads `libnb-trtinfer.so` with `dlopen` and `dlsym`, calls `nb_open`, and reads `TensorInfo` (name, dtype, shape, profile). |
 | `csrc/engine.cpp` | `nb_open` deserializes the engine and creates the execution context; `nb_io_*` describe the tensors. |
-| `src/io.jl` | `bindings` checks the engine's tensors against the contract and returns the tensor indices, or a `BundleError`. |
+| `src/io.jl` | `resolve_io` compares the tensors the engine reports (`TensorInfo`) with the I/O contract and returns the tensor indices, or a `BundleError`. |
 | `src/predict.jl` | `Engine()` allocates the `(3, max)` input buffer and stores the indices and `sys.gpu.name`. |
 
 **Every call (`predict!`)**
@@ -129,8 +129,8 @@ flowchart TD
 
     subgraph P3["3. INFERENCE: every call"]
         HND["engine.jl<br/>Handle: dlopen + nb_open"] -->|"ccall nb_open(path)"| EC["engine.cpp<br/>nb_open / nb_io_*"]
-        EC -->|"TensorInfo: name, dtype,<br/>shape, profile"| BIND["io.jl<br/>bindings: verify tensors"]
-        BIND -->|"tensor indices x, signal,<br/>dT1, dT2"| PRED["predict!(out, engine, p)"]
+        EC -->|"TensorInfo: name, dtype,<br/>shape, profile"| BIND["io.jl<br/>resolve_io: check against the<br/>I/O contract, find indices"]
+        BIND -->|"tensor indices x, signal,<br/>∂T₁, ∂T₂ (or BundleError)"| PRED["predict!(out, engine, p)"]
         PRED -->|"p, out, N"| CHK["io.jl<br/>checkinputs / checkoutputs"]
         CHK -->|"validated N"| STG["predict.jl<br/>stage! into input buffer"]
         STG -->|"(3, N) Float32 on stream"| CALL["engine.jl<br/>claim! / set_shape! / set_address! / run!"]

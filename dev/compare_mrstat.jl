@@ -11,7 +11,7 @@
 # engine of the installed TensorRT version.
 
 using NeuralBloch
-using NeuralBloch: TensorRT, bindings
+using NeuralBloch: TensorRT, resolve_io
 using CUDACore: CuArray, CuMatrix, synchronize
 using Printf
 
@@ -27,7 +27,7 @@ ours = Engine(model)
 pred = predict(ours, gpu_voxels(v))
 
 theirs = TensorRT.Handle(MRSTAT_ENGINE)
-io = bindings(TensorRT.tensors(theirs), model.ntr)
+io = resolve_io(TensorRT.tensors(theirs), model.ntr)
 X = CuArray(Float32.(permutedims(hcat(v.T₁, v.T₂, v.B₁))))       # (3, N): the engine's x
 outs = (signal = CuMatrix{ComplexF32}(undef, model.ntr, N), ∂T₁ = CuMatrix{ComplexF32}(undef, model.ntr, N),
         ∂T₂ = CuMatrix{ComplexF32}(undef, model.ntr, N))

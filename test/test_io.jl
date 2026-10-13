@@ -2,7 +2,7 @@
 # Julia only: fake engine descriptions, array *types* and plain numbers stand
 # in for engines and GPU arrays.
 
-using NeuralBloch: BundleError, publicname, cardname, bindings, input_problem, output_problem,
+using NeuralBloch: BundleError, publicname, cardname, resolve_io, input_problem, output_problem,
                    layout_problem, overlap_problem, batch_problem, checkinputs, checkoutputs
 using NeuralBloch.TensorRT: TensorInfo
 using CUDACore: CuArray, CuMatrix, CuVector, DeviceMemory
@@ -23,8 +23,8 @@ tier(:T0, "io: names") do
 end
 
 tier(:T0, "io: engine against card") do
-    @test bindings(GOOD, 600) == (x = 0, signal = 1, ∂T₁ = 2, ∂T₂ = 3)
-    @test bindings(GOOD[[4, 2, 1, 3]], 600) == (x = 2, signal = 1, ∂T₁ = 3, ∂T₂ = 0)
+    @test resolve_io(GOOD, 600) == (x = 0, signal = 1, ∂T₁ = 2, ∂T₂ = 3)
+    @test resolve_io(GOOD[[4, 2, 1, 3]], 600) == (x = 2, signal = 1, ∂T₁ = 3, ∂T₂ = 0)
     broken = [  # engine description => words the BundleError must contain
         GOOD[1:3] => "no output dT2",
         [GOOD; out_info("extra")] => "unexpected tensor extra",
@@ -37,7 +37,7 @@ tier(:T0, "io: engine against card") do
         [GOOD[1:3]; out_info("dT2"; eltype = nothing)] => "dT2 is not Float32",
     ]
     for (tensors, words) in broken
-        err = @test_throws BundleError bindings(tensors, 600)
+        err = @test_throws BundleError resolve_io(tensors, 600)
         msg = sprint(showerror, err.value)
         @test occursin(words, msg)
         @test occursin("(batch, 3)", msg) && occursin("(batch, 600, 2)", msg)   # what was expected
