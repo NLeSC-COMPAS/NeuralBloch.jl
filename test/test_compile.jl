@@ -38,7 +38,7 @@ tier(:T0, "compile: the recipe is part of the key") do
                           TensorRT.Compiler("/usr/bin/g++", v"13.3.0"), nothing, "")
     key = TensorRT.native_key(sys, csrc_dir())
     @test occursin("-O2", key["recipe"]) && occursin("-fvisibility=hidden", key["recipe"])
-    @test sort(collect(keys(key))) == ["arch", "compiler", "csrc_sha256", "outputs", "recipe", "tensorrt", "tensorrt_headers"]
+    @test sort(collect(keys(key))) == ["arch", "compiler", "csrc_sha256", "outputs", "recipe", "tensorrt", "tensorrt_dir", "tensorrt_headers"]
 end
 
 tier(:T0, "compile: source hash") do

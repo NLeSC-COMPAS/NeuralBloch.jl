@@ -37,6 +37,60 @@ The package does not install these packages for you. To examine your system,
 run `NeuralBloch.versioninfo()`. It shows the install command for each
 missing package.
 
+### Without root access
+
+If you cannot use `sudo`, install TensorRT and the CUDA runtime headers from
+conda-forge into a folder that you own, and point the package at that folder
+with the environment variable `TENSORRT_ROOT`. The package looks in
+`$TENSORRT_ROOT/include`, `$TENSORRT_ROOT/targets/x86_64-linux/include` and
+`$TENSORRT_ROOT/lib` before the system directories. You need no
+`LD_LIBRARY_PATH`. The compiled code records where the libraries are.
+
+This example uses [pixi](https://pixi.sh). Any conda-compatible tool works
+the same way.
+
+1. Choose the CUDA version. Your GPU driver limits it. Run `nvidia-smi` and
+   read `CUDA Version` in the top right. If it shows 13.0 or higher, you can
+   use `13.*`. If it shows 12.x, you must use `12.*`: a TensorRT for CUDA 13
+   does not run on that driver.
+
+2. Make a folder with this `pixi.toml`:
+
+   ```toml
+   [workspace]
+   name = "tensorrt"
+   channels = ["conda-forge"]
+   platforms = ["linux-64"]
+
+   [dependencies]
+   cuda-version = "12.*"          # from step 1
+   libnvinfer = "11.*"
+   libnvinfer-devel = "11.*"
+   libnvonnxparser = "11.*"
+   libnvonnxparser-devel = "11.*"
+   cuda-cudart-dev = "*"
+   ```
+
+3. Install the packages, and set `TENSORRT_ROOT` to the environment:
+
+   ```sh
+   cd /path/to/that/folder
+   pixi install
+   export TENSORRT_ROOT=$PWD/.pixi/envs/default
+   ```
+
+   Add the `export` line to your `~/.bashrc` so that each new Julia session
+   finds TensorRT. Do not start Julia through `pixi run` or `pixi shell`.
+   They are not necessary, and they can put conda's compiler on the `PATH`.
+
+4. Start Julia and run `NeuralBloch.versioninfo()`. It must show the
+   folder of `TENSORRT_ROOT` for the TensorRT library, the ONNX parser, the
+   TensorRT headers and the CUDA headers.
+
+The package uses the system g++ (8 or newer). If your system has no g++,
+add `gxx = "*"` to the dependencies and put `$TENSORRT_ROOT/bin` on the
+`PATH`.
+
 ## Installation
 
 The package is not in the Julia General registry. Add it with the URL or
