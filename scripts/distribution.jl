@@ -7,15 +7,17 @@
 # Conditions (plan.md): a fresh depot (a temporary JULIA_DEPOT_PATH);
 # installed with Pkg.add(url = …), i.e. from this repository's committed
 # HEAD, so neither uncommitted files nor sibling repositories can help; a
-# read-only package directory. Done when Engine() compiles and builds by
-# itself and its predictions are correct: equal, within the tolerance
-# between two builds of the same ONNX (dev/NOTES.md, D18), to what the
-# development setup predicts, which scripts/validate.jl checks against EPG.
+# read-only package directory. Done when Engine() compiles and builds its
+# engines by itself and every target's predictions are correct: equal,
+# within the tolerance between two builds of the same ONNX (dev/NOTES.md,
+# D18), to what the development setup predicts, which scripts/validate.jl
+# checks against EPG.
 #
 # Everything lands in a temporary directory under tempdir(), removed at the
 # end. The exit code is 1 if a check fails.
 
 using NeuralBloch
+using NeuralBloch: TARGETS
 using CUDACore: CuArray, synchronize
 using Serialization: serialize
 
@@ -54,11 +56,13 @@ check("functional", NeuralBloch.functional())
 engine = Engine()                               # first use: compile, build, cache
 println(engine)
 v, expected = deserialize(reference)
-out = predict(engine, map(CuArray, v))
-synchronize()
-worst = maximum(k -> maximum(abs, Array(out[k]) .- expected[k]) / maximum(abs, expected[k]), keys(expected))
-println("largest relative difference from the development build: ", worst)
-check("predictions match the development build", worst <= parse(Float64, ARGS[3]))
+for (target, ref) in pairs(expected)              # every target: every ONNX model was installed
+    out = predict(engine, map(CuArray, v); target)
+    synchronize()
+    worst = maximum(k -> maximum(abs, Array(out[k]) .- ref[k]) / maximum(abs, ref[k]), keys(ref))
+    println("largest relative difference from the development build, $target: ", worst)
+    check("$target predictions match the development build", worst <= parse(Float64, ARGS[3]))
+end
 check("cache in the fresh depot", startswith(NeuralBloch.TensorRT.cache_root(), first(DEPOT_PATH)))
 check("package directory untouched", snapshot() == before)
 close(engine)
@@ -75,7 +79,7 @@ function main()
     println("Reference outputs from the development setup ($(REPO))")
     v = voxels(3000)
     engine = Engine()
-    expected = map(Array, predict(engine, map(CuArray, v)))
+    expected = NamedTuple{TARGETS}(map(target -> map(Array, predict(engine, map(CuArray, v); target)), TARGETS))
     close(engine)
     serialize(reference, (v, expected))
 
@@ -94,7 +98,7 @@ function main()
         println(passed ? "PASS  " : "FAIL  ", name)
     end
     println("first use in the fresh depot: ", round(t / 60; digits = 1), " minutes, downloads included")
-    good = ok && length(checks) == 6 && all(last, checks)
+    good = ok && length(checks) == 8 && all(last, checks)
     println(good ? "Distribution test passed." : "Distribution test FAILED.")
     rm(root; recursive = true, force = true)
     return good

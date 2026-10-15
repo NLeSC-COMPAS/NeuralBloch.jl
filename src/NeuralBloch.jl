@@ -28,7 +28,7 @@ include("predict.jl")
 using .TensorRT: functional, PrerequisiteError, CompileError, BuildError, TensorRTError
 
 export Engine, Model, outputs, predict!, predict, checkdomain
-public ntr, domain, batchprofile, sequence, functional, versioninfo
+public ntr, rank, domain, batchprofile, sequence, functional, versioninfo
 public BundleError, PrerequisiteError, CompileError, BuildError, TensorRTError
 
 end

@@ -10,7 +10,9 @@
 #             derivative method the model card states, on the training
 #             sequence as the card describes it. The evaluation set covers
 #             the card's training domain (14400 points, seed 20260826).
-#   memory    200 consecutive predict! calls: no host or GPU allocation, no GC.
+#   memory    200 consecutive predict! calls per target (signal and
+#             derivatives, signal, coefficients): no host or GPU allocation,
+#             no GC.
 #   speed     on par with MRSTAT.jl's engine: 1.30 ms for 14400 voxels
 #             (plan.md, appendix A), within 10 %.
 #
@@ -89,27 +91,29 @@ function allocations(out, engine, p; calls = 100)
     synchronize()
     return host, device, Base.GC_Diff(Base.gc_num(), gc0).pause
 end
-for (name, out) in (("signal + derivatives", outputs(engine, N)), ("signal only", outputs(engine, N; derivatives = false)))
-    host, device, gcs = allocations(out, engine, p)
-    @printf("   %-21s host %d bytes, GPU %d bytes, %d GCs   %s\n", name, host, device, gcs,
-            verdict!("memory, $name", host == 0 && device == 0 && gcs == 0))
+for target in (:signal_and_derivatives, :signal, :coefficients)
+    host, device, gcs = allocations(outputs(engine, N; target), engine, p)
+    @printf("   %-23s host %d bytes, GPU %d bytes, %d GCs   %s\n", target, host, device, gcs,
+            verdict!("memory, $target", host == 0 && device == 0 && gcs == 0))
 end
 
 # --- speed ------------------------------------------------------------------------------
 
 println("\n== speed: median ms per call (device synchronized after each)")
-println("   ", rpad("N", 8), rpad("predict!", 11), rpad("signal only", 13), rpad("engine alone", 14),
-        rpad("host µs", 10), "MRSTAT's predict! (appendix A: graph replay)")
+println("   ", rpad("N", 8), rpad("predict!", 11), rpad("signal", 9), rpad("coefficients", 14),
+        rpad("engine alone", 14), rpad("host µs", 10), "MRSTAT's predict! (appendix A: graph replay)")
 appendix_a = Dict(10000 => 1.03, 14400 => 1.30, 40000 => 3.43)
 for n in (1000, 10000, 14400, 40000)
     q = gpu_voxels(evaluation_set(model, n; seed = n))
-    full, signal = outputs(engine, n), outputs(engine, n; derivatives = false)
+    full, signal, coefficients = (outputs(engine, n; target) for target in (:signal_and_derivatives, :signal,
+                                                                             :coefficients))
     t_full = latency(() -> predict!(full, engine, q))
     t_signal = latency(() -> predict!(signal, engine, q))
+    t_coefficients = latency(() -> predict!(coefficients, engine, q))
     submit = host_submission(() -> predict!(full, engine, q))
     predict!(full, engine, q)                                  # binds this batch; then the run alone
-    t_engine = latency(() -> NeuralBloch.TensorRT.run!(engine.handle))
-    @printf("   %-8d%-11.3f%-13.3f%-14.3f%-10.1f%s\n", n, t_full, t_signal, t_engine, submit,
+    t_engine = latency(() -> NeuralBloch.TensorRT.run!(engine.targets.signal_and_derivatives.handle))
+    @printf("   %-8d%-11.3f%-9.3f%-14.3f%-14.3f%-10.1f%s\n", n, t_full, t_signal, t_coefficients, t_engine, submit,
             haskey(appendix_a, n) ? @sprintf("%.2f", appendix_a[n]) : "—")
     if n == 14400
         @printf("   at 14400 voxels: %.3f ms against a target of %.2f ms   %s\n", t_full, LATENCY_TARGET_MS,

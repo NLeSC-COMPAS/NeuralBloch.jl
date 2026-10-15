@@ -21,6 +21,6 @@ end
     # exported
     :Engine, :Model, :outputs, :predict!, :predict, :checkdomain,
     # public, qualified
-    :ntr, :domain, :batchprofile, :sequence, :functional, :versioninfo,
+    :ntr, :rank, :domain, :batchprofile, :sequence, :functional, :versioninfo,
     :BundleError, :PrerequisiteError, :CompileError, :BuildError, :TensorRTError])
 end

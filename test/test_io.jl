@@ -3,7 +3,8 @@
 # in for engines and GPU arrays.
 
 using NeuralBloch: BundleError, publicname, cardname, resolve_io, input_problem, output_problem,
-                   layout_problem, overlap_problem, batch_problem, alignment, checkinputs, checkoutputs
+                   layout_problem, overlap_problem, batch_problem, alignment, checkinputs, checkoutputs,
+                   outputlayout
 using NeuralBloch.TensorRT: TensorInfo
 using CUDACore: CuArray, CuMatrix, CuVector, DeviceMemory
 
@@ -142,11 +143,25 @@ tier(:T0, "io: inputs and outputs as a whole") do
     @test occursin("p has no property B₁", sprint(showerror, err.value))
 
     cpu = zeros(ComplexF32, 600, 3)
-    err = @test_throws ArgumentError checkoutputs((; signal = cpu), 600, 3)
+    check(out) = checkoutputs(out, 3; ntr = 600, rank = 16)
+    err = @test_throws ArgumentError check((; signal = cpu))
     @test occursin("out.signal is a Matrix{ComplexF32} in CPU memory", sprint(showerror, err.value))
-    for bad in ((; ∂T₁ = cpu), (; signal = cpu, ∂T₁ = cpu), (; signal = cpu, ∂T₁ = cpu, ∂T₂ = cpu, extra = cpu))
-        err = @test_throws ArgumentError checkoutputs(bad, 600, 3)
-        @test occursin("(; signal) or (; signal, ∂T₁, ∂T₂)", sprint(showerror, err.value))
+    err = @test_throws ArgumentError check((; coefficients = zeros(Float32, 16, 3)))
+    @test occursin("out.coefficients is a Matrix{Float32} in CPU memory", sprint(showerror, err.value))
+    for bad in ((; ∂T₁ = cpu), (; signal = cpu, ∂T₁ = cpu), (; signal = cpu, ∂T₁ = cpu, ∂T₂ = cpu, extra = cpu),
+                (; signal = cpu, coefficients = cpu), (; coefficients = cpu, ∂T₁ = cpu, ∂T₂ = cpu))
+        err = @test_throws ArgumentError check(bad)
+        @test occursin("(; signal, ∂T₁, ∂T₂) in any order, (; signal) or (; coefficients)", sprint(showerror, err.value))
     end
-    @test_throws ArgumentError checkoutputs(cpu, 600, 3)          # not a NamedTuple
+    err = @test_throws ArgumentError check(cpu)                       # not a NamedTuple
+    @test occursin("out must be a NamedTuple", sprint(showerror, err.value))
+end
+
+tier(:T0, "io: each output set's layout") do
+    A = zeros(Float32, 1, 1)
+    @test outputlayout((; signal = A), 600, 16) == (600, ComplexF32)
+    @test outputlayout((signal = A, ∂T₁ = A, ∂T₂ = A), 600, 16) == (600, ComplexF32)
+    @test outputlayout((∂T₂ = A, signal = A, ∂T₁ = A), 600, 16) == (600, ComplexF32)   # any order
+    @test outputlayout((; coefficients = A), 600, 16) == (16, Float32)
+    @test_throws ArgumentError outputlayout((; signal = A, ∂T₁ = A), 600, 16)
 end

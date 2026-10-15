@@ -3,7 +3,9 @@
 NeuralBloch.jl runs the NeuralBloch network on NVIDIA GPUs with TensorRT.
 The network is a surrogate for the FISP3D simulation of MR fingerprinting.
 From T₁, T₂ and B₁ of each voxel, it predicts the signal and its derivatives
-with respect to T₁ and T₂.
+with respect to T₁ and T₂, the signal alone, or the signal's coefficients in
+the network's low-rank basis. Each comes from its own TensorRT engine, which
+computes only that.
 
 The package contains the trained network as a model bundle in `models/`:
 ONNX files and a card that describes them, written by NeuralBloch's
@@ -13,10 +15,11 @@ to 1.5. On your machine, the package does these steps automatically:
 
 1. **Compile.** g++ compiles the C++ code of the package (`csrc/`) against
    your TensorRT. This occurs one time for each TensorRT version.
-2. **Build.** A subprocess builds a TensorRT engine for your GPU from the
+2. **Build.** A subprocess builds a TensorRT engine for your GPU from each
    ONNX file. This occurs one time for each GPU model and engine setting.
-3. **Predict.** `predict!` runs the engine on your GPU arrays. It writes the
-   results directly into output arrays that you own, without copies.
+3. **Predict.** `predict!` runs the engine for what you ask on your GPU
+   arrays. It writes the results directly into output arrays that you own,
+   without copies.
 
 A cache keeps the results of steps 1 and 2. You can delete the cache at any
 time. For more information, see [`architecture.md`](architecture.md).
@@ -116,11 +119,12 @@ This example shows the complete workflow. Run it as one script.
 using NeuralBloch, CUDACore
 
 # 1. Make the engine. The first time, this compiles the C++ code and builds
-#  the engine. After that, it uses the cache.
+#  the engines. After that, it uses the cache.
 engine = Engine()
 
 # Optional: check the model
 NeuralBloch.ntr(engine)             # 600 readouts for each voxel
+NeuralBloch.rank(engine)            # 16 basis coefficients for each voxel
 NeuralBloch.batchprofile(engine)    # (min = 1, opt = 14400, max = 40000) voxels in each call
 NeuralBloch.sequence(engine)        # the FISP3D sequence of the training data
 
@@ -130,15 +134,16 @@ p = (T₁ = CuArray(Float32[1.0, 0.8, 2.0]),
      T₂ = CuArray(Float32[0.1, 0.05, 0.3]),
      B₁ = CuArray(Float32[1.0, 0.95, 1.1]))
 
-# 3. Predict into new arrays.
-out = predict(engine, p)                         # (; signal, ∂T₁, ∂T₂), each 600×3
-sig = predict(engine, p; derivatives = false)    # (; signal) only
-signal = Array(out.signal)                       # Copy to the CPU. This waits for the GPU.
+# 3. Predict into new arrays. The target says what to compute.
+out = predict(engine, p)                                # (; signal, ∂T₁, ∂T₂), each 600×3
+sig = predict(engine, p; target = :signal)              # (; signal) only, much faster
+coef = predict(engine, p; target = :coefficients)       # (; coefficients), 16×3
+signal = Array(out.signal)                              # Copy to the CPU. This waits for the GPU.
 
 # 4. Or predict into the existing arrays again and again.
-out = outputs(engine, 3)                         # or outputs(engine, 3; derivatives = false)
+out = outputs(engine, 3)                                # or outputs(engine, 3; target = :signal)
 for iteration in 1:10
-    predict!(out, engine, p)                     # Writes into out.
+    predict!(out, engine, p)                            # Writes into out.
 end
 
 # 5. Release the GPU memory now. If you do not do this, the garbage collector releases it later.
@@ -147,8 +152,14 @@ close(engine)
 
 Notes:
 
-- Each output is a `CuMatrix{ComplexF32}`, indexed `[readout, voxel]`, at
-  unit proton density. ∂T₁ and ∂T₂ are per second. They are not scaled.
+- The signal and its derivatives are each a `CuMatrix{ComplexF32}`, indexed
+  `[readout, voxel]`, at unit proton density. ∂T₁ and ∂T₂ are per second.
+  They are not scaled.
+- The coefficients are a `CuMatrix{Float32}`, indexed `[coefficient, voxel]`:
+  the signal's coordinates in the network's rank-16 basis. The bundle does
+  not include the basis.
+- `predict!` computes what its outputs ask for: `(; signal, ∂T₁, ∂T₂)`,
+  `(; signal)` or `(; coefficients)`.
 - The input can be any object with the properties `T₁`, `T₂` and `B₁`.
 - For more information about a function, use the Julia help, for example
   `?predict!`.
@@ -160,8 +171,10 @@ BlochSimulators.jl, with exact forward-sensitivity derivatives), the
 normalized mean absolute error over the training domain is 1.21 % for the
 signal, 0.70 % for ∂T₁ and 1.15 % for ∂T₂.
 
-On an RTX 2080 Ti, `predict!` takes 1.3 ms for 14400 voxels and 3.5 ms for
-40000 voxels. To measure on your machine, use `scripts/validate.jl`.
+On an RTX 2080 Ti, for 14400 voxels, `predict!` takes 1.28 ms for the signal
+and its derivatives, 0.29 ms for the signal alone and 0.13 ms for the
+coefficients; for 40000 voxels, 3.5, 0.79 and 0.37 ms. To measure on your
+machine, use `scripts/validate.jl`.
 
 ## Development
 

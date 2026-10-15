@@ -232,34 +232,50 @@ function overlap_problem(names::Tuple, addresses::Tuple, nbytes::Integer)
     return nothing
 end
 
-# (; signal) or (; signal, ∂T₁, ∂T₂), in any order.
-outputkeys_ok(keys::Tuple) =
-    keys === (:signal,) || (length(keys) == 3 && :signal in keys && :∂T₁ in keys && :∂T₂ in keys)
+# The output sets: the signal and its derivatives (in any order), the signal
+# alone, or the coefficients. Each is one target, computed by its own engine.
+outputkeys_ok(keys::Tuple) = keys === (:signal,) || keys === (:coefficients,) ||
+                             (length(keys) == 3 && :signal in keys && :∂T₁ in keys && :∂T₂ in keys)
+
+const OUTPUT_SETS = "(; signal, ∂T₁, ∂T₂) in any order, (; signal) or (; coefficients)"
+
+"""
+    outputlayout(out, ntr, rank) -> (rows, E)
+
+The rows and element type every output in `out` must have: `(rank, Float32)`
+for `(; coefficients)`, `(ntr, ComplexF32)` for the signal and its
+derivatives. An `ArgumentError` unless `out` is one of the output sets.
+"""
+function outputlayout(out::NamedTuple, ntr::Integer, rank::Integer)
+    outputkeys_ok(keys(out)) || throw(ArgumentError("out must be $OUTPUT_SETS, not a NamedTuple with keys $(keys(out))"))
+    return out isa NamedTuple{(:coefficients,)} ? (Int(rank), Float32) : (Int(ntr), ComplexF32)
+end
+
+outputlayout(out, ntr, rank) = throw(ArgumentError("out must be a NamedTuple, $OUTPUT_SETS, not a $(typeof(out))"))
 
 address(A::CuArray) = UInt(pointer(A))
 
 """
-    checkoutputs(out, ntr, N)
+    checkoutputs(out, N; ntr, rank)
 
-Check `out` against the contract for a batch of `N` voxels: a NamedTuple
-`(; signal)` or `(; signal, ∂T₁, ∂T₂)` of dense `(ntr, N)`
-`CuMatrix{ComplexF32}`s, 256-byte aligned, not overlapping. Otherwise an
+Check `out` against the contract for a batch of `N` voxels: one of the output
+sets ([`outputlayout`](@ref)) of dense `CuMatrix`es, each `(ntr, N)`
+`ComplexF32` for the signal and its derivatives or `(rank, N)` `Float32` for
+the coefficients, 256-byte aligned, not overlapping. Otherwise an
 `ArgumentError` saying what to change.
 """
-function checkoutputs(out::NamedTuple, ntr::Integer, N::Integer)
-    outputkeys_ok(keys(out)) || throw(ArgumentError(
-        "out must be (; signal) or (; signal, ∂T₁, ∂T₂), in any order, not a NamedTuple with keys $(keys(out))"))
+checkoutputs(out, N::Integer; ntr::Integer, rank::Integer) = checkoutputs(out, N, outputlayout(out, ntr, rank)...)
+
+# The checks once `out` is known to be an output set of `rows` × N outputs of `E`.
+function checkoutputs(out::NamedTuple, N::Integer, rows::Integer, ::Type{E}) where {E}
     map(keys(out), values(out)) do name, A
-        problem = output_problem(typeof(A), ComplexF32)
+        problem = output_problem(typeof(A), E)
         problem === nothing || throw(ArgumentError("out.$name is $problem"))
-        problem = layout_problem(size(A), address(A), ntr, N, ComplexF32)
+        problem = layout_problem(size(A), address(A), rows, N, E)
         problem === nothing || throw(ArgumentError("out.$name is $problem"))
     end
     # (A name of its own: reassigning a variable the closure above uses would box it.)
-    overlap = overlap_problem(keys(out), map(address, values(out)), ntr * N * sizeof(ComplexF32))
+    overlap = overlap_problem(keys(out), map(address, values(out)), rows * N * sizeof(E))
     overlap === nothing || throw(ArgumentError(overlap))
     return nothing
 end
-
-checkoutputs(out, ntr, N) = throw(ArgumentError(
-    "out must be a NamedTuple, (; signal) or (; signal, ∂T₁, ∂T₂), not a $(typeof(out))"))

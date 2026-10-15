@@ -23,7 +23,7 @@ flowchart BT
 | Runs | once per C++ source, TensorRT version and g++ | once per ONNX, GPU model, TensorRT version, settings and C++ source | every `predict!` call |
 | Entry point | `compile(sys)` | `build(onnx)` | `Handle(path)`, `predict!` |
 | Input | `csrc/*`, g++, TensorRT headers | ONNX, GPU, `BuildSettings`, `nb-trt-build` | `model.engine`, `libnb-trtinfer.so`, GPU arrays |
-| Output | `libnb-trtinfer.so`, `nb-trt-build` | `model.engine` | signal, ∂T₁, ∂T₂ |
+| Output | `libnb-trtinfer.so`, `nb-trt-build` | `model.engine`, one per target | signal, ∂T₁, ∂T₂; signal; or coefficients |
 | Cache | `native/` | `engines/` | none |
 | Runs as | `g++` subprocess | `nb-trt-build` subprocess | `ccall` into a shared library, in the Julia process |
 | Error | `CompileError` (g++ failed), `PrerequisiteError` (header and library versions differ) | `BuildError` | `TensorRTError` |
@@ -65,12 +65,12 @@ Goal: turn `csrc/` into the two native products.
 
 ### 2. Build
 
-Goal: turn the ONNX into a serialized `model.engine` for this GPU.
+Goal: turn each target's ONNX model into a serialized `model.engine` for this GPU. The bundle has three targets (signal and derivatives, signal, coefficients); each is built, cached and opened on its own, and the build layer does not know they belong together.
 
 | File | Role |
 |---|---|
-| `src/model.jl` | `Model()` checks `card.toml`, the ONNX sha256 pin and the RF tables; supplies the ONNX path. |
-| `src/predict.jl` | `Engine(model; batch, tf32)` creates the `BuildSettings` and calls `build`. |
+| `src/model.jl` | `Model()` checks `card.toml` (format 2), each target's ONNX sha256 pin and the RF tables; supplies the ONNX paths. |
+| `src/predict.jl` | `Engine(model; batch, tf32)` creates the `BuildSettings` and calls `build` for each target, before opening any. |
 | `src/tensorrt/system.jl` | `require(sys)` also checks the GPU; supplies name, capability and UUID for the engine key and `CUDA_VISIBLE_DEVICES`. |
 | `src/tensorrt/build.jl` | `BuildSettings`, `build()`, and `run_builder` (subprocess, watchdog, exit-code messages, `BuildError`). Before the subprocess starts, `build` returns CUDA.jl's pooled memory to the driver. |
 | `src/tensorrt/compile.jl` | Supplies `Native.builder`, the executable `run_builder` runs. |
@@ -80,25 +80,25 @@ Goal: turn the ONNX into a serialized `model.engine` for this GPU.
 
 ### 3. Inference
 
-Goal: open the engine once, then run it for every call.
+Goal: open the engines once, then run the one each call asks for.
 
-**Opening the engine (once per `Engine`)**
+**Opening the engines (once per `Engine`)**
 
 | File | Role |
 |---|---|
 | `src/tensorrt/compile.jl` | Supplies `Native.library`, which `Handle` loads. |
 | `src/tensorrt/engine.jl` | `Handle` loads `libnb-trtinfer.so` with `dlopen` and `dlsym`, calls `nb_open`, and reads `TensorInfo` (name, dtype, shape, profile). |
 | `csrc/engine.cpp` | `nb_open` deserializes the engine and creates the execution context; `nb_io_*` describe the tensors. |
-| `src/io.jl` | `resolve_io` compares the tensors the engine reports (`TensorInfo`) with the I/O contract and returns the tensor indices, or a `BundleError`. |
-| `src/predict.jl` | `Engine()` allocates the `(3, max)` input buffer and stores the indices and `sys.gpu.name`. |
+| `src/io.jl` | `resolve_io` compares the tensors each engine reports (`TensorInfo`) with its target's I/O contract and returns the tensor indices, or a `BundleError`. |
+| `src/predict.jl` | `Engine()` makes a `Target` per engine: the handle, the indices and its own `(3, max)` input buffer. It checks that the engines accept the same batch sizes, and stores `sys.gpu.name`. |
 
 **Every call (`predict!`)**
 
 | File | Role |
 |---|---|
 | `src/io.jl` | `checkinputs`, `checkoutputs`, `batch_problem`, plus alignment and overlap checks, all before anything is queued. Also the ASCII/Unicode name mapping (`dT1` and `∂T₁`). |
-| `src/predict.jl` | `predict!`, `predict` and `outputs`. `stage!` copies `T₁`, `T₂`, `B₁` into the input buffer. The sink buffer takes derivatives that were not requested. `checkdomain` and `close` are also here. |
-| `src/model.jl` | Holds `ntr`, the training domain and the sequence metadata; `ntr`, `domain` and `sequence` in `predict.jl` read them. |
+| `src/predict.jl` | `predict!`, `predict` and `outputs`. The keys of `out` choose the target (`targetof`); `stage!` copies `T₁`, `T₂`, `B₁` into that target's input buffer; `bind!` binds its outputs. `checkdomain` and `close` are also here. |
+| `src/model.jl` | Holds `ntr`, `rank`, the training domain and the sequence metadata; `ntr`, `rank`, `domain` and `sequence` in `predict.jl` read them. |
 | `src/tensorrt/engine.jl` | `claim!` orders streams, `set_shape!` checks the profile, `set_address!` binds device pointers, `run!` enqueues the run. `close` and the finalizer free the handle. |
 | `csrc/engine.cpp` | `nb_set_shape`, `nb_set_address`, `nb_enqueue` (`enqueueV3` on the CUDA stream), `nb_close`. |
 | `csrc/common.h` | Logger fills `last_error`, which `nb_last_error()` returns to Julia. |
@@ -116,8 +116,8 @@ flowchart TD
     end
 
     subgraph P2["2. BUILD: once per ONNX / GPU / TensorRT / settings"]
-        MOD["model.jl<br/>Model: ONNX + card"] -->|"model.onnx path"| ENG1
-        ENG1["predict.jl<br/>Engine(model; batch, tf32)"] -->|"onnx, BuildSettings"| BLD["build.jl<br/>BuildSettings, build"]
+        MOD["model.jl<br/>Model: ONNX per target + card"] -->|"one ONNX path per target"| ENG1
+        ENG1["predict.jl<br/>Engine(model; batch, tf32)"] -->|"each onnx, BuildSettings"| BLD["build.jl<br/>BuildSettings, build"]
         SYS2["system.jl<br/>require + GPU UUID"] -->|"GPU name, capability, UUID"| BLD
         BLD <-->|"lookup / publish<br/>(engine key)"| CA2["cache.jl<br/>engines/ entry"]
         BLD -->|"on cache miss"| RUN["run_builder (subprocess)"]
@@ -130,13 +130,13 @@ flowchart TD
     subgraph P3["3. INFERENCE: every call"]
         HND["engine.jl<br/>Handle: dlopen + nb_open"] -->|"ccall nb_open(path)"| EC["engine.cpp<br/>nb_open / nb_io_*"]
         EC -->|"TensorInfo: name, dtype,<br/>shape, profile"| BIND["io.jl<br/>resolve_io: check against the<br/>I/O contract, find indices"]
-        BIND -->|"tensor indices x, signal,<br/>∂T₁, ∂T₂ (or BundleError)"| PRED["predict!(out, engine, p)"]
+        BIND -->|"per target: x and its outputs'<br/>tensor indices (or BundleError)"| PRED["predict!(out, engine, p)<br/>keys of out choose the target"]
         PRED -->|"p, out, N"| CHK["io.jl<br/>checkinputs / checkoutputs"]
         CHK -->|"validated N"| STG["predict.jl<br/>stage! into input buffer"]
         STG -->|"(3, N) Float32 on stream"| CALL["engine.jl<br/>claim! / set_shape! / set_address! / run!"]
-        CALL -->|"ccall: shape (N, 3),<br/>4 device pointers, stream"| EC2["engine.cpp<br/>nb_set_shape / nb_set_address / nb_enqueue"]
+        CALL -->|"ccall: shape (N, 3),<br/>device pointers, stream"| EC2["engine.cpp<br/>nb_set_shape / nb_set_address / nb_enqueue"]
         EC2 -->|"enqueueV3(stream)"| GPU["TensorRT on GPU"]
-        GPU -.->|"signal, dT1, dT2 written<br/>into caller's CuMatrix, async"| PRED
+        GPU -.->|"the target's outputs written<br/>into caller's CuMatrix, async"| PRED
     end
 
     CH["common.h<br/>Logger, last_error"] -.->|"#include"| CS

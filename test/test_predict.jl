@@ -1,8 +1,12 @@
 # predict.jl: Engine, outputs, predict!, predict, checkdomain and the
-# metadata queries. The T2 testsets follow the plan's predict! checklist.
+# metadata queries. The T2 testsets follow the plan's predict! checklist, for
+# each target: the signal and its derivatives, the signal alone, and the
+# signal's basis coefficients, each from its own engine.
 
-using NeuralBloch: Engine, Model, outputs, predict!, predict, checkdomain, ntr, domain, batchprofile, sequence
+using NeuralBloch: Engine, Model, outputs, predict!, predict, checkdomain, ntr, rank, domain, batchprofile,
+                   sequence, TARGETS
 using CUDACore: CUDACore, CuArray, CuMatrix, CuVector, synchronize
+using LinearAlgebra: norm
 using StructArrays: StructArray
 
 # Voxels inside the training domain (T₂ < T₁), reproducibly, on the CPU.
@@ -18,13 +22,20 @@ voxels(N; seed = 1) = map(CuArray, voxels_cpu(N; seed))
 const ENGINES = Dict{NTuple{3,Int},Any}()
 engine(; batch = (1, 14400, 40000)) = get!(() -> Engine(; batch), ENGINES, batch)
 
-sentinel(dims...) = fill!(CuMatrix{ComplexF32}(undef, dims...), ComplexF32(NaN))
+sentinel(::Type{T}, dims::Integer...) where {T} = fill!(CuMatrix{T}(undef, dims...), T(NaN))
+sentinel(dims::Integer...) = sentinel(ComplexF32, dims...)
 untouched(A) = (synchronize(); all(isnan, Array(A)))
 relative(a, b) = maximum(abs, Array(a) .- Array(b)) / maximum(abs, Array(b))
+
+# Each target's output names, element type and rows.
+const SETS = (signal_and_derivatives = ((:signal, :∂T₁, :∂T₂), ComplexF32, 600),
+              signal = ((:signal,), ComplexF32, 600),
+              coefficients = ((:coefficients,), Float32, 16))
 
 tier(:T0, "predict: model metadata and checkdomain") do
     m = Model()
     @test ntr(m) == 600
+    @test rank(m) == 16
     @test domain(m) == (T₁ = (0.1, 6.0), T₂ = (0.01, 2.0), B₁ = (0.5, 1.5))
     s = sequence(m)
     @test s.kind == "FISP3D" && s.TR == 0.00558 && length(s.rf_angle) == 600
@@ -64,68 +75,111 @@ end
 tier(:T2, "predict: engine metadata") do
     e = engine()
     @test ntr(e) == 600
+    @test rank(e) == 16
     @test batchprofile(e) == (min = 1, opt = 14400, max = 40000)
     @test domain(e) == domain(Model())
     @test sequence(e) == sequence(Model())
     @test isopen(e)
-    @test occursin("NTR 600", sprint(show, e))
+    @test keys(e.targets) == TARGETS
+    @test occursin("NTR 600, rank 16", sprint(show, e))
     p = voxels(10)
     @test checkdomain(e, p) === p                               # and on the GPU
 end
 
-tier(:T2, "predict: predict and predict! agree, repeatedly") do
+tier(:T2, "predict: predict and predict! agree, repeatedly, for every target") do
     e, N = engine(), 1000
     p = voxels(N)
-    a = predict(e, p)
-    @test keys(a) == (:signal, :∂T₁, :∂T₂)
-    @test all(A -> A isa CuMatrix{ComplexF32} && size(A) == (600, N), a)
-    synchronize()
-    ref = map(Array, a)
-    @test all(A -> all(isfinite, A) && maximum(abs, A) > 0, ref)
-    out = outputs(e, N)
-    @test predict!(out, e, p) === out                           # returns the arrays it was given
-    synchronize()
-    @test map(Array, out) == ref                                # bitwise
-    for _ in 1:3                                                # repeated calls: bitwise
-        predict!(out, e, p)
+    for (target, (names, E, rows)) in pairs(SETS)
+        a = predict(e, p; target)
+        @test keys(a) == names
+        @test all(A -> A isa CuMatrix{E} && size(A) == (rows, N), a)
+        @test keys(outputs(e, N; target)) == names
         synchronize()
-        @test map(Array, out) == ref
+        ref = map(Array, a)
+        @test all(A -> all(isfinite, A) && maximum(abs, A) > 0, ref)
+        out = outputs(e, N; target)
+        @test predict!(out, e, p) === out                       # returns the arrays it was given
+        synchronize()
+        @test map(Array, out) == ref                            # bitwise
+        for _ in 1:3                                            # repeated calls: bitwise
+            predict!(out, e, p)
+            synchronize()
+            @test map(Array, out) == ref
+        end
+        o1, o2 = outputs(e, N; target), outputs(e, N; target)   # alternating output sets: bitwise
+        for i in 1:4
+            predict!(isodd(i) ? o1 : o2, e, p)
+        end
+        synchronize()
+        @test map(Array, o1) == map(Array, o2) == ref
     end
-    o1, o2 = outputs(e, N), outputs(e, N)                       # alternating output sets: bitwise
-    for i in 1:4
-        predict!(isodd(i) ? o1 : o2, e, p)
-    end
+    @test predict(e, p) isa NamedTuple{(:signal, :∂T₁, :∂T₂)}  # the default target
+    o = outputs(e, N)
+    reordered = (∂T₂ = o.∂T₂, signal = o.signal, ∂T₁ = o.∂T₁)   # any order of the three
+    @test predict!(reordered, e, p) === reordered
     synchronize()
-    @test map(Array, o1) == map(Array, o2) == ref
+    @test map(Array, o) == map(Array, predict(e, p))
 end
 
-tier(:T2, "predict: signal only") do
+tier(:T2, "predict: targets interleaved in one task") do
+    e, N = engine(), 2000
+    p = voxels(N; seed = 4)
+    refs = map(target -> map(Array, predict(e, p; target)), TARGETS)
+    outs = map(target -> outputs(e, N; target), TARGETS)
+    for _ in 1:3, out in outs
+        predict!(out, e, p)
+    end
+    synchronize()
+    @test map(o -> map(Array, o), outs) == refs
+end
+
+tier(:T2, "predict: the signal alone, from its own engine") do
     e, N = engine(), 777
     p = voxels(N; seed = 3)
     full = predict(e, p)
-    s = predict(e, p; derivatives = false)
-    @test keys(s) == (:signal,)
-    @test keys(outputs(e, N; derivatives = false)) == (:signal,)
+    s = predict(e, p; target = :signal)
     synchronize()
-    @test Array(s.signal) == Array(full.signal)                 # bitwise
-    # A smaller batch after a larger one reuses the engine's scratch; the
-    # first 10 voxels are the same ones, and results do not depend on the
-    # batch they are computed in (dev/NOTES.md, S6 ③b).
-    small = predict(e, voxels(10; seed = 3); derivatives = false)
+    # Another engine, so the bound between builds (D18); bitwise on the
+    # RTX 2080 Ti with TensorRT 11.2, whose kernels are the same.
+    @test relative(s.signal, full.signal) ≤ 5e-6
+    # A smaller batch after a larger one; the first 10 voxels are the same
+    # ones, and results do not depend on the batch (dev/NOTES.md, S6 ③b).
+    small = predict(e, voxels(10; seed = 3); target = :signal)
     synchronize()
-    @test Array(small.signal) == Array(full.signal)[:, 1:10]
+    @test Array(small.signal) == Array(s.signal)[:, 1:10]
+end
+
+tier(:T2, "predict: the coefficients are the signal's, in a rank-16 basis") do
+    # The bundle does not ship the basis, but the signal must be one linear
+    # map of the coefficients: fitting that map by least squares on many
+    # voxels reproduces the signal to float precision only if both engines
+    # are the same network.
+    e, N = engine(), 2000
+    p = voxels(N; seed = 9)
+    C = Float64.(Array(predict(e, p; target = :coefficients).coefficients))
+    S = ComplexF64.(Array(predict(e, p).signal))
+    @test size(C) == (16, N)
+    U = S / C                                                   # (600, 16), least squares
+    @test norm(S - U * C) / norm(S) ≤ 1e-5
+    # Coefficients of other voxels: the same map, fitted on the first set
+    q = voxels(500; seed = 10)
+    Cq = Float64.(Array(predict(e, q; target = :coefficients).coefficients))
+    Sq = ComplexF64.(Array(predict(e, q; target = :signal).signal))
+    @test norm(Sq - U * Cq) / norm(Sq) ≤ 1e-5
 end
 
 tier(:T2, "predict: chunks into column views") do
     e, N = engine(), 14400
     p = voxels(N; seed = 5)
-    whole = predict(e, p)
-    chunked = outputs(e, N)
-    for r in (1:4000, 4001:10000, 10001:14400)                  # boundaries at multiples of 4 (S6)
-        predict!(map(A -> view(A, :, r), chunked), e, map(v -> view(v, r), p))
+    for target in TARGETS
+        whole = predict(e, p; target)
+        chunked = outputs(e, N; target)
+        for r in (1:4000, 4001:10000, 10001:14400)              # boundaries at multiples of 4 (S6)
+            predict!(map(A -> view(A, :, r), chunked), e, map(v -> view(v, r), p))
+        end
+        synchronize()
+        @test map(Array, chunked) == map(Array, whole)          # bitwise (S6 ③b)
     end
-    synchronize()
-    @test map(Array, chunked) == map(Array, whole)              # bitwise (S6 ③b)
 end
 
 tier(:T2, "predict: bad outputs are refused before TensorRT runs") do
@@ -139,15 +193,23 @@ tier(:T2, "predict: bad outputs are refused before TensorRT runs") do
         (o = good(); (; o..., ∂T₂ = o.signal)) => "overlap",
         (o = good(); (; o..., signal = zeros(ComplexF32, 600, N))) => "CPU",
         (o = good(); (; o..., ∂T₁ = view(sentinel(600, N + 1), :, 2:N+1))) => "256",
-        (o = good(); (; o.signal, o.∂T₁)) => "(; signal) or (; signal, ∂T₁, ∂T₂)",
+        (o = good(); (; o.signal, o.∂T₁)) => "(; signal, ∂T₁, ∂T₂) in any order, (; signal) or (; coefficients)",
+        (o = good(); (; o.signal, coefficients = sentinel(Float32, 16, N))) => "(; coefficients)",
+        (; coefficients = sentinel(16, N)) => "CuMatrix{Float32}",            # complex for real
+        (; coefficients = sentinel(Float32, 600, N)) => "a batch of 100 voxels needs (16, 100)",
+        (; coefficients = view(sentinel(Float32, 16, N + 1), :, 2:N+1)) => "multiple of 4",
+        (; signal = sentinel(Float32, 600, N)) => "CuMatrix{ComplexF32}",         # real for complex
     ]
     for (out, words) in cases
         err = @test_throws ArgumentError predict!(out, e, p)
         @test occursin(words, sprint(showerror, err.value))
-        for A in values(out)                                    # nothing was written anywhere
-            A isa CuMatrix{ComplexF32} && @test untouched(A)
+        for A in values(out)                                    # nothing was written to the sentinels
+            (A isa CuMatrix{ComplexF32} || A isa CuMatrix{Float32}) && @test untouched(A)
         end
     end
+    @test_throws ArgumentError outputs(e, N; target = :derivatives)
+    err = @test_throws ArgumentError predict(e, p; target = :derivatives)
+    @test occursin("target must be :signal_and_derivatives, :signal or :coefficients", sprint(showerror, err.value))
 end
 
 tier(:T2, "predict: bad inputs and batch sizes are refused") do
@@ -163,21 +225,27 @@ tier(:T2, "predict: bad inputs and batch sizes are refused") do
     @test untouched(out.signal)
 
     small = engine(; batch = (1, 64, 1000))
-    err = @test_throws ArgumentError predict!(outputs(small, 1001), small, voxels(1001))
-    msg = sprint(showerror, err.value)
-    @test occursin("1001 voxels", msg) && occursin("1 to 1000", msg)
-    @test occursin("batch = ", msg)                            # how to get an engine that fits
+    for target in TARGETS
+        err = @test_throws ArgumentError predict!(outputs(small, 1001; target), small, voxels(1001))
+        msg = sprint(showerror, err.value)
+        @test occursin("1001 voxels", msg) && occursin("1 to 1000", msg)
+        @test occursin("batch = ", msg)                        # how to get an engine that fits
+    end
 
     # predict refuses before allocating outputs a batch that size would need.
     large = voxels(2000)
-    @test (CUDACore.@allocated try predict(small, large) catch end) == 0
-    @test_throws ArgumentError predict(small, large)
+    for target in TARGETS
+        @test (CUDACore.@allocated try predict(small, large; target) catch end) == 0
+        @test_throws ArgumentError predict(small, large; target)
+    end
 
     # An empty batch (a mask with no voxels) is nothing to do.
     empty = voxels(0)
-    out0 = outputs(small, 0)
-    @test predict!(out0, small, empty) === out0
-    @test size(predict(small, empty).signal) == (600, 0)
+    for (target, (names, E, rows)) in pairs(SETS)
+        out0 = outputs(small, 0; target)
+        @test predict!(out0, small, empty) === out0
+        @test size(first(predict(small, empty; target))) == (rows, 0)
+    end
 end
 
 tier(:T2, "predict: results are in stream order, without synchronizing") do
@@ -197,7 +265,9 @@ tier(:T2, "predict: no allocations after warm-up") do
     e, N = engine(), 14400
     p = voxels(N)
     sa = StructArray((; p.T₁, p.T₂, p.B₁, ρˣ = CuArray(ones(Float32, N)), ρʸ = CuArray(zeros(Float32, N))))
-    for out in (outputs(e, N), outputs(e, N; derivatives = false)), q in (p, sa)
+    o = outputs(e, N)
+    reordered = (∂T₂ = o.∂T₂, signal = o.signal, ∂T₁ = o.∂T₁)
+    for out in (o, reordered, outputs(e, N; target = :signal), outputs(e, N; target = :coefficients)), q in (p, sa)
         predict!(out, e, q); predict!(out, e, q)
         synchronize()
         @test (@allocated predict!(out, e, q)) == 0               # host
@@ -218,47 +288,59 @@ end
 tier(:T2, "predict: two tasks share one engine") do
     e, N = engine(), 20000
     pA, pB = voxels(N; seed = 1), voxels(N; seed = 2)
-    refA, refB = map(Array, predict(e, pA)), map(Array, predict(e, pB))
-    synchronize()
-    results = Dict{Symbol,Bool}()
-    @sync for (name, p, ref) in ((:A, pA, refA), (:B, pB, refB))
-        @async begin                                           # each task has its own stream
-            out = outputs(e, N)
-            ok = true
-            for _ in 1:5
-                predict!(out, e, p)
-                yield()                                        # let the other task queue its run
-                synchronize()
-                ok &= map(Array, out) == ref
+    # Each pair: the target each task asks for. The same target makes the two
+    # tasks share one engine's buffers; different targets, the engine object.
+    for (targetA, targetB) in ((:signal_and_derivatives, :signal_and_derivatives), (:signal_and_derivatives, :signal),
+                               (:coefficients, :signal))
+        refA, refB = map(Array, predict(e, pA; target = targetA)), map(Array, predict(e, pB; target = targetB))
+        synchronize()
+        results = Dict{Symbol,Bool}()
+        @sync for (name, p, target, ref) in ((:A, pA, targetA, refA), (:B, pB, targetB, refB))
+            @async begin                                       # each task has its own stream
+                out = outputs(e, N; target)
+                ok = true
+                for _ in 1:5
+                    predict!(out, e, p)
+                    yield()                                    # let the other task queue its run
+                    synchronize()
+                    ok &= map(Array, out) == ref
+                end
+                results[name] = ok
             end
-            results[name] = ok
         end
+        @test results[:A] && results[:B]
     end
-    @test results[:A] && results[:B]
 end
 
 tier(:T2, "predict: a small engine for small problems") do
     small, e = engine(; batch = (1, 64, 1000)), engine()
     @test batchprofile(small) == (min = 1, opt = 64, max = 1000)
     p = voxels(64; seed = 13)
-    a, b = predict(small, p), predict(e, p)
-    synchronize()
-    @test all(relative(a[k], b[k]) ≤ 5e-6 for k in keys(a))    # another build of the same ONNX (D18)
+    for target in TARGETS
+        a, b = predict(small, p; target), predict(e, p; target)
+        synchronize()
+        @test all(relative(a[k], b[k]) ≤ 5e-6 for k in keys(a))    # another build of the same ONNX (D18)
+    end
 end
 
 tier(:T2, "predict: close") do
     e = Engine(; batch = (1, 64, 1000))
     p = voxels(8)
-    predict(e, p)
-    predict(e, voxels(1000); derivatives = false)               # grows the engine's sink
+    for target in TARGETS
+        predict(e, p; target)
+    end
     synchronize()
-    own = sizeof(e.input) + sizeof(e.sink)
+    own = sum(t -> sizeof(t.input), e.targets)
     used = CUDACore.used_memory()
     close(e)
     @test !isopen(e)
+    @test all(t -> !isopen(t.handle), e.targets)                 # every engine
     @test used - CUDACore.used_memory() ≥ own                   # its buffers too, not only TensorRT's
     close(e)                                                    # idempotent
-    @test_throws InvalidStateException predict(e, p)
+    for target in TARGETS
+        @test_throws InvalidStateException predict(e, p; target)
+    end
+    @test_throws InvalidStateException predict!(outputs(engine(), 8; target = :coefficients), e, p)
 end
 
 tier(:T2, "predict: close races predict! and close") do
@@ -272,7 +354,7 @@ tier(:T2, "predict: close races predict! and close") do
     seen = Set{String}()
     for round in 1:10
         e = Engine(; batch = (1, 64, 1000))
-        out = outputs(e, N)
+        out = outputs(e, N; target = (:signal_and_derivatives, :signal, :coefficients)[mod1(round, 3)])
         running = Threads.@spawn try
             while true
                 predict!(out, e, p)

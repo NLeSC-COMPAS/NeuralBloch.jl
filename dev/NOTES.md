@@ -414,7 +414,8 @@ Documented, not changed:
   discards. TensorRT writes outputs only into the buffers bound to them,
   and places its intermediates in the context's scratch memory, never in a
   user's buffer. The signal-only test checks bitwise equality with the full
-  run on every machine where the suite runs.
+  run on every machine where the suite runs. Since D21 (2026-10-15) the signal has its
+  own engine, and no output is aliased.
 
 ## The fisp600-rank16 v1 bundle (2026-10-15)
 
@@ -451,6 +452,39 @@ against its own reference (forward differences): the new one is less
 accurate on the domain both cover. That is a property of the checkpoint, not
 of this package.
 
+## One engine per target (2026-10-15)
+
+An `Engine` now holds three TensorRT engines, one per target of the bundle:
+`signal_and_derivatives`, `signal` and `coefficients`. The keys of `out` choose
+the target; `outputs` and `predict` take `target =` (default
+`:signal_and_derivatives`, the former default), replacing `derivatives =`.
+
+**Scratch memory** of each execution context at `max` = 40000 voxels:
+439.5 MiB for signal and derivatives (11.2 KiB per voxel), 19.5 MiB for the
+signal, 19.5 MiB for the coefficients: the two new engines add 9 %. No
+shared scratch buffer is needed.
+
+**The signal alone** is bitwise equal to the full engine's signal on this
+machine (TensorRT picks the same kernels for the signal network); the test
+allows D18's 5e-6, since it is another engine. **The coefficients** are the
+signal's in a rank-16 basis: a least-squares rank-16 map reproduces the
+signal from them to 7e-8 relative (the test asks 1e-5).
+
+**Speed** (`scripts/validate.jl`, median ms, synchronized after each call):
+
+| N | `predict!` | signal | coefficients | engine alone |
+|---|---|---|---|---|
+| 1000 | 0.247 | 0.086 | 0.070 | 0.230 |
+| 10000 | 1.030 | 0.244 | 0.122 | 0.915 |
+| 14400 | 1.277 | 0.291 | 0.132 | 1.262 |
+| 40000 | 3.471 | 0.790 | 0.374 | 3.389 |
+
+The signal alone used to cost what signal and derivatives cost (1.26 ms at
+14400 voxels, task 10); now 0.29 ms. **Memory**: 0 bytes on the host and the
+GPU, 0 GCs, for all three targets. One allocation found on the way: binding
+the outputs by mapping a closure over their names allocated 96 bytes for the
+three-output set; the binding is now spelled out per output set.
+
 ## Decisions
 
 Phase 0 settles the open questions below. Where the plan's "Decisions needed"
@@ -469,7 +503,7 @@ table recommends an option, implementation follows that recommendation.
 | D9 | Version detection | `ccall` into the system libraries, not `nm` | S1 ③ |
 | D10 | Default profile | MIN/OPT/MAX = 1/14400/40000; `batch` keyword for others | S4 |
 | D11 | Workspace cap | None (TensorRT default) | S5 |
-| D12 | Signal-only derivatives | One shared Engine-owned scratch buffer for dT1 and dT2 | S6 ①② |
+| D12 | Signal-only derivatives | ~~One shared Engine-owned scratch buffer for dT1 and dT2~~ Superseded by D21: the signal has its own engine | S6 ①② |
 | D13 | Misaligned `out` | `ArgumentError` (TensorRT documents 256-byte alignment); refines the contract's "any address" | S6 ③ |
 | D14 | Before a build | `CUDACore.reclaim()`; report free memory on failure | S7 ① |
 | D15 | GPU for the builder | `CUDA_VISIBLE_DEVICES=GPU-<uuid>` | S7 ③ |
@@ -478,3 +512,5 @@ table recommends an option, implementation follows that recommendation.
 | D18 | Tolerances | Bitwise within one engine; 5e-6 relative between builds | S2, S4, S6 |
 | D19 | Input staging | Three strided `cuMemcpy2DAsync`: zero host allocation, ≈ 3% of engine time | S10 |
 | D20 | The bundle and its card | Made entirely by NeuralBloch (`export_bundle`), copied into `models/` unchanged; card format 2 (family, version, rank, an ONNX model and sha256 per target, the derivative method with steps only for forward differences); `Model` reads format 2 only | three-engine plan |
+| D21 | Targets | One TensorRT engine per target (signal and derivatives, signal, coefficients), in one `Engine`; the keys of `out` choose it; `outputs`/`predict` take `target` | three-engine plan |
+| D22 | Input buffers | One `(3, max)` buffer per target: `claim!` orders the runs of one handle only, so a shared buffer could be overwritten by another target's run on another stream | three-engine plan |
