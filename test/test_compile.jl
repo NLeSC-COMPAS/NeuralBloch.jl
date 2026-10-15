@@ -38,7 +38,7 @@ tier(:T0, "compile: the recipe is part of the key") do
                           TensorRT.Compiler("/usr/bin/g++", v"13.3.0"), nothing, "")
     key = TensorRT.native_key(sys, csrc_dir())
     @test occursin("-O2", key["recipe"]) && occursin("-fvisibility=hidden", key["recipe"])
-    @test sort(collect(keys(key))) == ["arch", "compiler", "csrc_sha256", "outputs", "recipe", "tensorrt", "tensorrt_headers"]
+    @test sort(collect(keys(key))) == ["arch", "compiler", "csrc_sha256", "outputs", "recipe", "tensorrt", "tensorrt_dir", "tensorrt_headers"]
 end
 
 tier(:T0, "compile: source hash") do
@@ -74,6 +74,23 @@ tier(:T1, "compile: products") do
             @test occursin("libnvinfer.so.$(sys.nvinfer.version.major)", deps)
         end
         @test occursin("libnvonnxparser.so", read(`ldd $(native.builder)`, String))
+
+        # Both record TensorRT's directory as DT_RPATH, which LD_LIBRARY_PATH
+        # cannot override (DT_RUNPATH it could).
+        for f in (native.library, native.builder)
+            dyn = read(`readelf -d $f`, String)
+            @test occursin("(RPATH)", dyn) && occursin("[$(dirname(sys.nvinfer.path))]", dyn)
+            @test !occursin("(RUNPATH)", dyn)
+        end
+        mktempdir() do other                          # another "TensorRT", without its symbols
+            stub = joinpath(other, "libnvinfer.so.$(sys.nvinfer.version.major)")
+            run(pipeline(`$(sys.compiler.path) -shared -fPIC -x c++ - -o $stub -Wl,-soname,$(basename(stub))`;
+                         stdin = IOBuffer("")))
+            withenv("LD_LIBRARY_PATH" => other) do
+                @test TOML.parse(read(`$(native.builder) --version`, String))["tensorrt_library"] ==
+                      TensorRT.vstring(sys.nvinfer.version)
+            end
+        end
 
         # The versions both products report are the ones system.jl found.
         lib = Libdl.dlopen(native.library)

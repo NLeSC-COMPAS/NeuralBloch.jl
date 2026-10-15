@@ -1,5 +1,7 @@
 # system.jl: finding TensorRT, the headers, g++ and the GPU.
 
+using Libdl: Libdl
+
 tier(:T0, "system: parsing") do
     trt11 = """
     #define NV_INFER_VERSION_H
@@ -24,6 +26,28 @@ tier(:T0, "system: parsing") do
     @test TensorRT.parse_header_version("#define NV_TENSORRT_MAJOR 10\n") === nothing
     @test TensorRT.parse_header_version("") === nothing
 
+    withenv("TENSORRT_ROOT" => "/opt/trt") do
+        @test TensorRT.root_dirs("include", "lib") == ["/opt/trt/include", "/opt/trt/lib"]
+    end
+    withenv("TENSORRT_ROOT" => nothing) do
+        @test isempty(TensorRT.root_dirs("include"))
+    end
+
+    # A TENSORRT_ROOT prefix laid out like a conda environment is searched
+    # before the system's directories.
+    mktempdir() do root
+        include = mkpath(joinpath(root, "include"))
+        foreach(f -> write(joinpath(include, f), ""), ("NvInfer.h", "NvOnnxParser.h"))
+        write(joinpath(include, "NvInferVersion.h"), trt11)
+        cuda = mkpath(joinpath(root, "targets", "$(Sys.ARCH)-linux", "include", "crt"))
+        write(joinpath(dirname(cuda), "cuda_runtime_api.h"), "")
+        write(joinpath(cuda, "host_defines.h"), "")
+        withenv("TENSORRT_ROOT" => root) do
+            @test TensorRT.find_headers() == TensorRT.Headers(include, v"11.2.1+2")
+            @test TensorRT.find_cuda_headers() == TensorRT.CUDAHeaders(dirname(cuda), true)
+        end
+    end
+
     @test TensorRT.parse_compiler_version("13.3.0\n") == v"13.3.0"
     @test TensorRT.parse_compiler_version("12\n") == v"12"
     @test TensorRT.parse_compiler_version("clang version 18") === nothing
@@ -44,6 +68,7 @@ tier(:T0, "system: install hints") do
     @test occursin("sudo dnf install libnvinfer11 libnvonnxparsers11 libnvinfer-headers-devel " *
                    "libnvonnxparsers-devel cuda-cudart-devel-13-3 cuda-crt-13-3 gcc-c++", h)
     @test occursin("docs.nvidia.com/deeplearning/tensorrt", h)
+    @test occursin("TENSORRT_ROOT", h)
 
     # The CUDA version of the TensorRT packages is not always known: then the
     # hint says how to find it.
@@ -74,6 +99,10 @@ tier(:T0, "system: report") do
     @test occursin("not found", text)
     @test occursin("sudo apt-get install libnvinfer11 libnvonnxparsers11", text)
     @test occursin("no driver", text)
+    withenv("TENSORRT_ROOT" => "/opt/trt") do        # where the headers were looked for, in order
+        @test occursin("not found in /opt/trt/include, /usr/include/$(Sys.ARCH)-linux-gnu or /usr/include",
+                       Dict(TensorRT.problems(none))[:headers])
+    end
 
     # Headers from another TensorRT release than the library.
     lib = TensorRT.Library("/usr/lib/libnvinfer.so.11", v"11.2.1+2")
@@ -100,10 +129,31 @@ tier(:T0, "system: report") do
     @test occursin("TensorRT", sprint(NeuralBloch.versioninfo))
 end
 
+# TENSORRT_ROOT's libraries come before the system's even when the system
+# has one of a major that is tried first. libc.so.6 stands in for the
+# system's library, a stub libc.so.7 in the prefix for TENSORRT_ROOT's.
+tier(:T1, "system: TENSORRT_ROOT's libraries come first") do
+    mktempdir() do root
+        stub = joinpath(mkpath(joinpath(root, "lib")), "libc.so.7")
+        run(pipeline(`$(SYSTEM.compiler.path) -shared -fPIC -x c++ - -o $stub -Wl,-soname,libnb-root-stub.so`;
+                     stdin = IOBuffer("")))
+        withenv("TENSORRT_ROOT" => root) do
+            @test Libdl.dlpath(TensorRT.load_library("libc", (6, 7))) == stub
+        end
+        withenv("TENSORRT_ROOT" => nothing) do
+            @test Libdl.dlpath(TensorRT.load_library("libc", (6, 7))) != stub
+        end
+    end
+end
+
 # What detection finds must be what the package manager installed.
 tier(:T1, "system: detection agrees with dpkg") do
     if Sys.which("dpkg-query") === nothing
         @test_skip "dpkg is not available on this machine"
+        return
+    end
+    if haskey(ENV, "TENSORRT_ROOT")
+        @test_skip "TensorRT comes from TENSORRT_ROOT, which no package manager owns"
         return
     end
     sys = TensorRT.detect()

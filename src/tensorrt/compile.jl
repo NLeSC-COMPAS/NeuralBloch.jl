@@ -61,13 +61,17 @@ csrc_hash(dir::AbstractString = csrc_dir()) =
 # that changes only a flag still recompiles.
 const CXXFLAGS = ["-std=c++17", "-O2", "-Wall", "-Wextra", "-fvisibility=hidden", "-fvisibility-inlines-hidden"]
 const LIBFLAGS = ["-fPIC", "-shared"]          # plus -Wl,--version-script=exports.map
-const LDFLAGS = ["-Wl,--no-undefined"]
+# --disable-new-dtags records the rpath (see gxx) as DT_RPATH, which the
+# loader searches before LD_LIBRARY_PATH; DT_RUNPATH comes after it, so
+# another TensorRT on LD_LIBRARY_PATH would replace the one detect() found.
+const LDFLAGS = ["-Wl,--no-undefined", "-Wl,--disable-new-dtags"]
 
 native_key(sys::System, csrc) = Dict{String,Any}(
     "csrc_sha256" => csrc_hash(csrc),
     "arch" => string(Sys.ARCH),
     "tensorrt" => vstring(sys.nvinfer.version),
     "tensorrt_headers" => vstring(sys.headers.version),
+    "tensorrt_dir" => dirname(sys.nvinfer.path),
     "compiler" => "g++ $(sys.compiler.version)",
     "recipe" => join([CXXFLAGS; LIBFLAGS; "-Wl,--version-script"; LDFLAGS], ' '),
     "outputs" => "$NB_TRT_INFER_LIB $NB_TRT_BUILDER_EXE",
@@ -78,6 +82,11 @@ native_key(sys::System, csrc) = Dict{String,Any}(
 # #include_next.
 default_includes() = ("/usr/include", "/usr/include/$(Sys.ARCH)-linux-gnu")
 
+# The outputs record TensorRT's library directory as their rpath, so
+# nb-trt-build finds libnvinfer without LD_LIBRARY_PATH when TensorRT is
+# outside the linker's default directories (TENSORRT_ROOT); the directory is
+# therefore part of the key.
+#
 # Compile `src` into `dir/name`, a shared library (exporting what exports.map
 # lists) or an executable; return the command, or throw a CompileError. g++
 # runs in `dir`, so the command names its output relative to the entry.
@@ -92,7 +101,7 @@ function gxx(sys::System, src, dir, name; shared::Bool)
     kind = shared ? [LIBFLAGS; "-Wl,--version-script=" * joinpath(dirname(src), "exports.map")] : String[]
     libs = ["-l:libnvinfer.so.$major"; shared ? String[] : ["-l:libnvonnxparser.so.$major"]]
     cmd = `$(sys.compiler.path) $CXXFLAGS $kind $(reduce(vcat, includes; init = String[])) $src -o $name
-           -L$(dirname(sys.nvinfer.path)) $libs $LDFLAGS`
+           -L$(dirname(sys.nvinfer.path)) -Wl,-rpath,$(dirname(sys.nvinfer.path)) $libs $LDFLAGS`
     output = IOBuffer()
     p = run(pipeline(ignorestatus(Cmd(cmd; dir)); stdout = output, stderr = output))
     success(p) || throw(CompileError(cmd, String(take!(output)), vstring(sys.nvinfer.version)))

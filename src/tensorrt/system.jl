@@ -127,8 +127,17 @@ end
 # differently, so they are never loaded.
 const MAJORS = (11, 12, 10)
 
+# TensorRT installed outside the system directories, without root (a pixi or
+# conda environment, an unpacked tarball), is named by the TENSORRT_ROOT
+# prefix. Its include, targets/<arch>/include and lib directories are
+# searched before the system's.
+root_dirs(sub...) = haskey(ENV, "TENSORRT_ROOT") ? [joinpath(ENV["TENSORRT_ROOT"], s) for s in sub] : String[]
+
+# Where TensorRT's headers are looked for, in this order.
+header_dirs() = [root_dirs("include"); "/usr/include/$(Sys.ARCH)-linux-gnu"; "/usr/include"]
+
 function find_headers()
-    for dir in ("/usr/include/$(Sys.ARCH)-linux-gnu", "/usr/include")
+    for dir in header_dirs()
         all(f -> isfile(joinpath(dir, f)), ("NvInfer.h", "NvOnnxParser.h", "NvInferVersion.h")) || continue
         v = parse_header_version(read(joinpath(dir, "NvInferVersion.h"), String))
         v === nothing || return Headers(dir, v)
@@ -143,7 +152,8 @@ function find_cuda_headers()
     targets = Sys.ARCH === :aarch64 ? ("sbsa-linux", "aarch64-linux") : ("$(Sys.ARCH)-linux",)
     versioned = isdir("/usr/local") ? filter(startswith("cuda-"), readdir("/usr/local")) : String[]
     sort!(versioned; by = d -> something(tryparse(VersionNumber, d[6:end]), v"0"), rev = true)
-    dirs = ["/usr/local/cuda/include";
+    dirs = [root_dirs(("targets/$t/include" for t in targets)..., "include");
+            "/usr/local/cuda/include";
             [joinpath("/usr/local", d, "targets", t, "include") for d in versioned for t in targets];
             "/usr/include"]
     found = [CUDAHeaders(d, isfile(joinpath(d, "crt", "host_defines.h")))
@@ -153,9 +163,12 @@ function find_cuda_headers()
 end
 
 # dlopen the first `stem.so.<major>` that loads; the library stays loaded.
+# TENSORRT_ROOT's lib directory is tried with every major before the loader's
+# search, so a system TensorRT never wins over the prefix's, whatever their
+# majors.
 function load_library(stem, majors)
-    for m in majors
-        h = Libdl.dlopen("$stem.so.$m"; throw_error = false)
+    for dir in [root_dirs("lib"); ""], m in majors
+        h = Libdl.dlopen(joinpath(dir, "$stem.so.$m"); throw_error = false)
         h === nothing || return h
     end
     return nothing
@@ -247,7 +260,7 @@ function problems(sys::System; gpu::Bool = true)
         push!(p, :onnxparser => "TensorRT's ONNX parser library (libnvonnxparser.so.N) not found")
     if hdr === nothing
         push!(p, :headers => "TensorRT's headers (NvInfer.h, NvOnnxParser.h) not found in " *
-                             "/usr/include/$(Sys.ARCH)-linux-gnu or /usr/include")
+                             join(header_dirs(), ", ", " or "))
     elseif lib !== nothing && (hdr.version.major, hdr.version.minor) != (lib.version.major, lib.version.minor)
         push!(p, :headers => "TensorRT's headers in $(hdr.dir) are version $(vstring(hdr.version)), " *
                              "the library is $(vstring(lib.version))")
@@ -309,6 +322,8 @@ function hints(components; major::Integer = 11, cuda::Union{VersionNumber,Nothin
             push!(lines, "  X-Y is the CUDA version your TensorRT packages are built for: X.Y in the " *
                          "+cudaX.Y of their version (apt-cache policy libnvinfer$major, dnf info libnvinfer$major).")
         end
+        push!(lines, "Without root, install TensorRT from conda-forge (for example with pixi) and set " *
+                     "TENSORRT_ROOT to that environment; see the README.")
     end
     :gpu in components &&
         push!(lines, "NeuralBloch needs an NVIDIA GPU with a working driver; CUDACore.versioninfo() shows what CUDA sees.")
@@ -380,7 +395,8 @@ commands that install it.
 function versioninfo(io::IO = stdout, sys::System = detect())
     row(label, detail) = println(io, "  ", rpad(label, 20), something(detail, "not found"))
     lib, parser, hdr, cuda, cc, gpu = sys.nvinfer, sys.onnxparser, sys.headers, sys.cuda, sys.compiler, sys.gpu
-    println(io, "NeuralBloch system prerequisites (TensorRT from NVIDIA's deb/rpm packages):")
+    println(io, "NeuralBloch system prerequisites (TensorRT from NVIDIA's deb/rpm packages",
+            haskey(ENV, "TENSORRT_ROOT") ? ", or from TENSORRT_ROOT = $(ENV["TENSORRT_ROOT"])):" : "):")
     row("TensorRT library", lib === nothing ? nothing : "$(vstring(lib.version))  $(lib.path)")
     row("ONNX parser", parser === nothing ? nothing : "$(vstring(parser.version))  $(parser.path)")
     row("TensorRT headers", hdr === nothing ? nothing : "$(vstring(hdr.version))  $(hdr.dir)")
