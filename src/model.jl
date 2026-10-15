@@ -216,3 +216,34 @@ end
 
 Base.show(io::IO, m::Model) =
     print(io, "Model(", repr(m.dir), "; ", m.family, " v", m.version, ", ntr = ", m.ntr, ", rank = ", m.rank, ")")
+
+"""
+    contract_problems(current::Model, new::Model) -> Vector{String}
+
+What keeps bundle `new` from replacing `current` as a later version of the
+same model family; empty when nothing does. Within a family, callers rely on
+the readouts, the rank, the sequence (RF tables included) and the domain
+constraint staying the same, on the training domain staying the same or
+growing, and on the version going up. Two different families share no
+contract, so `new` of another family has no problems here.
+"""
+function contract_problems(current::Model, new::Model)
+    current.family == new.family || return String[]
+    problems = String[]
+    new.version > current.version ||
+        push!(problems, "version $(new.version) does not follow version $(current.version)")
+    for key in (:ntr, :rank, :constraint)
+        a, b = getfield(current, key), getfield(new, key)
+        a == b || push!(problems, "$key $(repr(a)) → $(repr(b))")
+    end
+    for key in keys(current.sequence)
+        a, b = current.sequence[key], new.sequence[key]
+        a == b || push!(problems, key in (:rf_angle, :rf_phase) ? "the $key table differs" : "sequence $key $(repr(a)) → $(repr(b))")
+    end
+    for (name, (lo, hi)) in pairs(current.domain)
+        newlo, newhi = new.domain[name]
+        newlo ≤ lo && hi ≤ newhi ||
+            push!(problems, "domain $name [$lo, $hi] → [$newlo, $newhi] does not contain the previous range")
+    end
+    return problems
+end

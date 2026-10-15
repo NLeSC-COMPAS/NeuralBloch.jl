@@ -186,3 +186,16 @@ julia --project -e 'using Pkg; Pkg.test()'
 
 The tests skip the parts that the machine cannot run, for example the GPU
 tests. Set `NEURALBLOCH_TEST_ALL=1` to make each skip a failure.
+Update the bundled model with a bundle from NeuralBloch's
+`uv run run.py export_bundle`:
+
+```sh
+julia --project dev/update_bundle.jl /path/to/NeuralBloch/outputs/bundle
+```
+
+It installs the bundle into `models/`. A later version of the same family
+must keep the family's contract: the same readouts, rank, sequence and RF
+tables, a training domain that is the same or wider, and a higher version.
+Otherwise the script changes nothing and lists the differences. Then run the
+tests and `scripts/validate.jl`, whose accuracy thresholds belong to the
+model they were measured on.

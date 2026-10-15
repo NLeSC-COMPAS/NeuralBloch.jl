@@ -1,6 +1,6 @@
 # model.jl: the bundle (ONNX per target, card, RF tables) and its checks. Julia only.
 
-using NeuralBloch: Model, BundleError, TARGETS
+using NeuralBloch: Model, BundleError, TARGETS, contract_problems
 
 const BUNDLE = joinpath(pkgdir(NeuralBloch), "models")
 
@@ -123,4 +123,78 @@ tier(:T0, "model: each ONNX must be the one the card pins") do
         end
     end
     @test_throws BundleError Model("/nonexistent/bundle")
+end
+
+tier(:T0, "model: a family's contract between versions") do
+    current = Model()
+    # A later bundle: version 2 with `edit` applied to its card, and `files`
+    # applied to its directory.
+    function later(edit; version = 2, files = identity)
+        dir = mktempdir()
+        b = edited_bundle(s -> edit(replace(s, "version = 1" => "version = $version")), dir)
+        files(b)
+        return Model(b)
+    end
+    @test contract_problems(current, later(identity)) == String[]
+    @test contract_problems(current, later(s -> replace(s, "T1 = [0.1, 6.0]" => "T1 = [0.05, 7.0]"))) == String[]
+    cases = [  # the later bundle => words one of the problems must contain
+        later(identity; version = 1) => "version 1 does not follow version 1",
+        later(s -> replace(s, "B1 = [0.5, 1.5]" => "B1 = [0.6, 1.5]")) =>
+            "domain B1 [0.5, 1.5] → [0.6, 1.5] does not contain the previous range",
+        later(s -> replace(s, "T2 = [0.01, 2.0]" => "T2 = [0.01, 1.0]")) => "domain T2",
+        later(s -> replace(s, "TR = 0.00558" => "TR = 0.006")) => "sequence TR 0.00558 → 0.006",
+        later(s -> replace(s, "max_state = 64" => "max_state = 32")) => "sequence max_state 64 → 32",
+        later(identity; files = b -> (f = joinpath(b, "rf_data", "rf_angle_list.txt");
+                                      write(f, replace(read(f, String), r"^[^\n]+"m => "1.0"; count = 1)))) =>
+            "the rf_angle table differs",
+        later(s -> replace(s, "ntr = 600" => "ntr = 599");
+              files = b -> foreach(("rf_angle_list.txt", "rf_phase_list.txt")) do name
+                  f = joinpath(b, "rf_data", name)
+                  write(f, join(readlines(f)[1:599], '\n'))
+              end) => "ntr 600 → 599",
+    ]
+    for (new, words) in cases
+        problems = contract_problems(current, new)
+        @test any(problem -> occursin(words, problem), problems)
+    end
+    # Another family is another contract: nothing to compare
+    other = later(s -> replace(s, "family = \"fisp600-rank16\"" => "family = \"fisp600b-rank16\"",
+                                  "B1 = [0.5, 1.5]" => "B1 = [0.6, 1.5]"))
+    @test contract_problems(current, other) == String[]
+end
+
+tier(:T0, "model: update_bundle.jl installs within the family's contract") do
+    script = joinpath(pkgdir(NeuralBloch), "dev", "update_bundle.jl")
+    function update(src, dest)
+        out, err = IOBuffer(), IOBuffer()
+        cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project()) $script $src $dest`
+        ok = success(pipeline(cmd; stdout = out, stderr = err))
+        return ok, String(take!(out)), String(take!(err))
+    end
+    mktempdir() do dir
+        dest = edited_bundle(identity, mkpath(joinpath(dir, "dest")))           # v1, as bundled
+        v2 = edited_bundle(s -> replace(s, "version = 1" => "version = 2", "T1 = [0.1, 6.0]" => "T1 = [0.1, 7.0]"),
+                           mkpath(joinpath(dir, "v2")))
+        write(joinpath(v2, "stray.txt"), "not named by the card")
+        ok, out, _ = update(v2, dest)
+        @test ok && occursin("Installed fisp600-rank16 v2", out)
+        @test (Model(dest).version, Model(dest).domain.T1) == (2, (0.1, 7.0))
+        @test !isfile(joinpath(dest, "stray.txt"))                             # only what the card names
+        @test readdir(dirname(dest)) == ["models"]                             # no temporaries left
+
+        ok, out, _ = update(v2, dest)
+        @test ok && occursin("already holds fisp600-rank16 v2", out)
+
+        narrower = edited_bundle(s -> replace(s, "version = 1" => "version = 3", "B1 = [0.5, 1.5]" => "B1 = [0.6, 1.5]"),
+                                 mkpath(joinpath(dir, "narrower")))
+        before = read(joinpath(dest, "card.toml"))
+        ok, _, err = update(narrower, dest)
+        @test !ok && occursin("domain B1 [0.5, 1.5] → [0.6, 1.5]", err)
+        @test read(joinpath(dest, "card.toml")) == before                      # unchanged
+
+        broken = edited_bundle(s -> replace(s, "format = 2" => "format = 3"), mkpath(joinpath(dir, "broken")))
+        ok, _, err = update(broken, dest)
+        @test !ok && occursin("Refusing", err) && occursin("format 3", err)
+        @test read(joinpath(dest, "card.toml")) == before
+    end
 end
