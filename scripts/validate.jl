@@ -5,12 +5,13 @@
 # Three targets (plan.md, "Definition of done"), each reported PASS or FAIL;
 # the exit code is 1 if any fails:
 #
-#   accuracy  NMAE against ground truth, i.e. BlochSimulators 0.9's FISP3D EPG
-#             simulation with finite-difference derivatives (the generator of
-#             the training data) on the training sequence as the model card
-#             describes it. The evaluation set is MRSTAT.jl's
-#             (scripts/validate_tensorrt.jl: 14400 points, seed 20260826),
-#             on which MRSTAT's engine measured 0.56 / 0.25 / 0.45 %.
+#   accuracy  NMAE against ground truth, i.e. BlochSimulators' FISP3D EPG
+#             simulation (the generator of the training data) with the
+#             derivative method the model card states, on the training
+#             sequence as the card describes it. The evaluation set covers
+#             the card's training domain (14400 points, seed 20260826; on
+#             the 2026-10-01 card's domain, MRSTAT.jl's evaluation set, on
+#             which MRSTAT's engine measured 0.56 / 0.25 / 0.45 %).
 #   memory    200 consecutive predict! calls: no host or GPU allocation, no GC.
 #   speed     on par with MRSTAT.jl's engine: 1.30 ms for 14400 voxels
 #             (plan.md, appendix A), within 10 %.
@@ -56,14 +57,15 @@ println("\nengine: ", engine)
 
 # --- accuracy ------------------------------------------------------------------------
 
-println("\n== accuracy: NMAE against BlochSimulators $(pkgversion(BlochSimulators)) EPG + finite differences")
-v = evaluation_set()
+println("\n== accuracy: NMAE against BlochSimulators $(pkgversion(BlochSimulators)) EPG + ",
+        model.derivatives.method)
+v = evaluation_set(model)
 N = length(v.T₁)
 p = gpu_voxels(v)
 checkdomain(engine, p)
 pred = predict(engine, p)
 t = @elapsed ref = epg(model, v)
-@printf("   %d voxels (MRSTAT.jl's evaluation set); EPG reference in %.1f s\n", N, t)
+@printf("   %d voxels over the card's training domain; EPG reference in %.1f s\n", N, t)
 for k in (:signal, :∂T₁, :∂T₂)
     e = nmae(pred[k], ref[k])
     @printf("   %-7s NMAE %.4f %%   (threshold %.2f %%, MRSTAT's engine %.2f %%)   %s\n", k, 100e,
@@ -102,7 +104,7 @@ println("   ", rpad("N", 8), rpad("predict!", 11), rpad("signal only", 13), rpad
         rpad("host µs", 10), "MRSTAT's predict! (appendix A: graph replay)")
 appendix_a = Dict(10000 => 1.03, 14400 => 1.30, 40000 => 3.43)
 for n in (1000, 10000, 14400, 40000)
-    q = gpu_voxels(evaluation_set(n; seed = n))
+    q = gpu_voxels(evaluation_set(model, n; seed = n))
     full, signal = outputs(engine, n), outputs(engine, n; derivatives = false)
     t_full = latency(() -> predict!(full, engine, q))
     t_signal = latency(() -> predict!(signal, engine, q))

@@ -20,7 +20,7 @@ include(joinpath(@__DIR__, "..", "scripts", "reference.jl"))
 const MRSTAT_ENGINE = normpath(joinpath(@__DIR__, "..", "..", "MRSTAT.jl", "models", "model.engine"))
 
 model = Model()
-v = evaluation_set()
+v = evaluation_set(model)
 N = length(v.T₁)
 
 ours = Engine(model)

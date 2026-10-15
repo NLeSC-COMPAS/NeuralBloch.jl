@@ -16,7 +16,7 @@ NeuralBloch = {path = ".."}
 
 [compat]
 Aqua = "0.8"
-BlochSimulators = "0.9"
+BlochSimulators = "0.10"
 CUDACore = "6"
 ComputationalResources = "0.3"
 Libdl = "1"

@@ -1,9 +1,10 @@
-# Accuracy against ground truth (T3): predictions against BlochSimulators
-# 0.9's FISP3D EPG simulation with forward-difference derivatives, the
-# generator of the training data, on the training sequence the card
-# describes. The bounds are twice what this fixed set measured (dev/NOTES.md,
-# task 10): a convention error (layout, units, complex pairing) misses by
-# ≈ 100 %. scripts/validate.jl reports the same on MRSTAT.jl's larger set.
+# Accuracy against ground truth (T3): predictions against BlochSimulators'
+# FISP3D EPG simulation, the generator of the training data, with the
+# derivative method the card states, on the training sequence and domain the
+# card describes. The bounds are twice what this fixed set measured
+# (dev/NOTES.md, task 10): a convention error (layout, units, complex
+# pairing) misses by ≈ 100 %. scripts/validate.jl reports the same on a
+# larger set.
 
 using NeuralBloch: Engine, Model, predict, sequence
 using CUDACore: CuArray
@@ -14,20 +15,21 @@ using StructArrays: StructArray
 # its macros: they would have to expand while this file is included anyway.
 if blocker(:T3) === nothing
     using BlochSimulators: BlochSimulators, FISP3D, gpu, f32, simulate_magnetization,
-                           simulate_derivatives_finite_difference
+                           simulate_derivatives_finite_difference, simulate_derivatives_forward_sensitivity
     using ComputationalResources: CUDALibs
 end
 
 # Measured 0.5507 / 0.2485 / 0.4579 % on this set (2026-10-01), doubled.
 const ACCURACY_BOUNDS = (signal = 0.0110, ∂T₁ = 0.0050, ∂T₂ = 0.0092)
 
-# A fixed set inside the training domain, sampled as upstream samples it:
-# T₁, T₂ log-uniform, B₁ uniform, T₂ < T₁ (here capped at 0.8 T₁).
-function accuracy_set(n = 2000; seed = 2026)
+# A fixed set inside the card's training domain, sampled as upstream samples
+# it: T₁, T₂ log-uniform, B₁ uniform, T₂ < T₁ (here capped at 0.8 T₁).
+function accuracy_set(model, n = 2000; seed = 2026)
     rng = Xoshiro(seed)
-    T₁ = exp.(rand(rng, n) .* (log(5.0) - log(0.1)) .+ log(0.1))
-    T₂ = min.(exp.(rand(rng, n) .* (log(2.0) - log(0.01)) .+ log(0.01)), 0.8 .* T₁)
-    B₁ = 0.8 .+ 0.4 .* rand(rng, n)
+    (T₁lo, T₁hi), (T₂lo, T₂hi), (B₁lo, B₁hi) = model.domain.T1, model.domain.T2, model.domain.B1
+    T₁ = exp.(rand(rng, n) .* (log(T₁hi) - log(T₁lo)) .+ log(T₁lo))
+    T₂ = min.(exp.(rand(rng, n) .* (log(T₂hi) - log(T₂lo)) .+ log(T₂lo)), 0.8 .* T₁)
+    B₁ = B₁lo .+ (B₁hi - B₁lo) .* rand(rng, n)
     return (; T₁, T₂, B₁)
 end
 
@@ -37,10 +39,15 @@ function epg_reference(model, v)
     seq = gpu(f32(FISP3D(rf, s.TR, s.TE, s.max_state, s.TI, s.TW, s.repetitions, s.inversion_prepulse,
                          s.wait_spoiling, s.undersampling_factor, s.delta_k_spoil)))
     parameters = gpu(f32(StructArray{BlochSimulators.T₁T₂B₁{Float64}}((v.T₁, v.T₂, v.B₁))))  # @parameters T₁ T₂ B₁
-    echos = simulate_magnetization(CUDALibs(), seq, parameters)
     d = model.derivatives
-    steps = BlochSimulators.T₁T₂B₁B₀(d.dT1_step, d.dT2_step, BlochSimulators.DEFAULT_ΔB₁, BlochSimulators.DEFAULT_ΔB₀)
-    ∂ = simulate_derivatives_finite_difference((:T₁, :T₂), echos, seq, parameters, steps)
+    if d.method == "forward sensitivity"
+        echos, ∂ = simulate_derivatives_forward_sensitivity((:T₁, :T₂), seq, parameters)
+    else                                                                # forward difference
+        echos = simulate_magnetization(CUDALibs(), seq, parameters)
+        steps = BlochSimulators.T₁T₂B₁B₀(d.dT1_step, d.dT2_step, BlochSimulators.DEFAULT_ΔB₁,
+                                         BlochSimulators.DEFAULT_ΔB₀)
+        ∂ = simulate_derivatives_finite_difference((:T₁, :T₂), echos, seq, parameters, steps)
+    end
     return (signal = echos, ∂T₁ = ∂.T₁, ∂T₂ = ∂.T₂)
 end
 
@@ -49,7 +56,7 @@ nmae(pred, ref) = (a = ComplexF64.(Array(pred)); b = ComplexF64.(Array(ref)); su
 tier(:T3, "accuracy: NMAE against EPG") do
     model = Model()
     engine = Engine(model)
-    v = accuracy_set()
+    v = accuracy_set(model)
     pred = predict(engine, map(x -> CuArray(Float32.(x)), v))
     ref = epg_reference(model, v)
     for k in (:signal, :∂T₁, :∂T₂)
