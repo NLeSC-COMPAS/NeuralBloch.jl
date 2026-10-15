@@ -38,7 +38,8 @@ end
 function Engine(model::Model = Model(); batch = (1, 14400, 40000), tf32::Bool = false)
     settings = TensorRT.BuildSettings(; batch, tf32)
     sys = TensorRT.detect()
-    handle = TensorRT.Handle(TensorRT.build(model.onnx; settings, sys); native = TensorRT.compile(sys))
+    handle = TensorRT.Handle(TensorRT.build(model.onnx.signal_and_derivatives; settings, sys);
+                             native = TensorRT.compile(sys))
     io = try
         resolve_io(TensorRT.tensors(handle), model.ntr)
     catch
@@ -276,7 +277,7 @@ function versioninfo(io::IO = stdout)
     println(io, "NeuralBloch ", pkgversion(@__MODULE__))
     model = try
         m = Model()
-        "$(m.onnx) (sha256 $(m.sha256[1:12])…, NTR $(m.ntr), $(m.provenance["upstream"]))"
+        "$(m.family) v$(m.version) in $(m.dir) (NTR $(m.ntr), rank $(m.rank), $(m.provenance["upstream"]))"
     catch err
         err isa BundleError || rethrow()
         sprint(showerror, err)

@@ -9,9 +9,7 @@
 #             simulation (the generator of the training data) with the
 #             derivative method the model card states, on the training
 #             sequence as the card describes it. The evaluation set covers
-#             the card's training domain (14400 points, seed 20260826; on
-#             the 2026-10-01 card's domain, MRSTAT.jl's evaluation set, on
-#             which MRSTAT's engine measured 0.56 / 0.25 / 0.45 %).
+#             the card's training domain (14400 points, seed 20260826).
 #   memory    200 consecutive predict! calls: no host or GPU allocation, no GC.
 #   speed     on par with MRSTAT.jl's engine: 1.30 ms for 14400 voxels
 #             (plan.md, appendix A), within 10 %.
@@ -25,11 +23,11 @@ using Printf, Statistics
 
 include("reference.jl")
 
-# NMAE thresholds per output: 1.05 × what this set measured on 2026-10-01,
-# rounded up (dev/NOTES.md, task 10). A different build of the same ONNX
-# moves NMAE in the sixth digit; a real regression moves the second.
-const THRESHOLDS = (signal = 0.0060, ∂T₁ = 0.0027, ∂T₂ = 0.0048)
-const MRSTAT = (signal = 0.0056, ∂T₁ = 0.0025, ∂T₂ = 0.0045)   # its engine, same set
+# NMAE thresholds per output: 1.05 × what this set measured for
+# fisp600-rank16 v1 on 2026-10-15, rounded up (dev/NOTES.md). A different
+# build of the same ONNX moves NMAE in the sixth digit; a real regression
+# moves the second.
+const THRESHOLDS = (signal = 0.0128, ∂T₁ = 0.0074, ∂T₂ = 0.0121)
 const LATENCY_TARGET_MS = 1.30 * 1.10                          # at 14400 voxels
 
 function latency(f; n = 50)
@@ -68,8 +66,8 @@ t = @elapsed ref = epg(model, v)
 @printf("   %d voxels over the card's training domain; EPG reference in %.1f s\n", N, t)
 for k in (:signal, :∂T₁, :∂T₂)
     e = nmae(pred[k], ref[k])
-    @printf("   %-7s NMAE %.4f %%   (threshold %.2f %%, MRSTAT's engine %.2f %%)   %s\n", k, 100e,
-            100THRESHOLDS[k], 100MRSTAT[k], verdict!("accuracy $k", e ≤ THRESHOLDS[k]))
+    @printf("   %-7s NMAE %.4f %%   (threshold %.2f %%)   %s\n", k, 100e, 100THRESHOLDS[k],
+            verdict!("accuracy $k", e ≤ THRESHOLDS[k]))
 end
 
 # --- memory ----------------------------------------------------------------------------

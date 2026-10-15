@@ -25,15 +25,16 @@ relative(a, b) = maximum(abs, Array(a) .- Array(b)) / maximum(abs, Array(b))
 tier(:T0, "predict: model metadata and checkdomain") do
     m = Model()
     @test ntr(m) == 600
-    @test domain(m) == (T₁ = (0.1, 5.0), T₂ = (0.01, 2.0), B₁ = (0.8, 1.2))
+    @test domain(m) == (T₁ = (0.1, 6.0), T₂ = (0.01, 2.0), B₁ = (0.5, 1.5))
     s = sequence(m)
     @test s.kind == "FISP3D" && s.TR == 0.00558 && length(s.rf_angle) == 600
 
     p = voxels_cpu(100)
     @test checkdomain(m, p) === p                               # works on CPU vectors too
     @test checkdomain(m, (; B₁ = p.B₁)) isa NamedTuple          # any subset of the properties
-    for (name, bad, words) in ((:T₁, 5.5f0, "p.T₁ ranges over"), (:T₁, 0.05f0, "[0.1, 5.0]"),
-                               (:T₂, 2.5f0, "p.T₂"), (:B₁, 1.25f0, "[0.8, 1.2]"), (:B₁, NaN32, "p.B₁"))
+    for (name, bad, words) in ((:T₁, 6.5f0, "p.T₁ ranges over"), (:T₁, 0.05f0, "[0.1, 6.0]"),
+                               (:T₂, 2.5f0, "p.T₂"), (:B₁, 1.55f0, "[0.5, 1.5]"), (:B₁, 0.45f0, "[0.5, 1.5]"),
+                               (:B₁, NaN32, "p.B₁"))
         q = map(copy, p)
         getproperty(q, name)[7] = bad
         if name === :T₂                                         # keep T₂ < T₁ out of the picture
@@ -52,9 +53,9 @@ tier(:T0, "predict: model metadata and checkdomain") do
 
     # The bounds themselves are inside, also once rounded to Float32 (which
     # puts 0.01f0 below 0.01): MRSTAT clamps its parameters to domain().
-    edges = (T₁ = Float32[0.1, 5.0], T₂ = Float32[0.01, 2.0], B₁ = Float32[0.8, 1.2])
+    edges = (T₁ = Float32[0.1, 6.0], T₂ = Float32[0.01, 2.0], B₁ = Float32[0.5, 1.5])
     @test checkdomain(m, edges) === edges
-    @test checkdomain(m, (T₁ = [0.1, 5.0], T₂ = [0.01, 2.0], B₁ = [0.8, 1.2])) isa NamedTuple
+    @test checkdomain(m, (T₁ = [0.1, 6.0], T₂ = [0.01, 2.0], B₁ = [0.5, 1.5])) isa NamedTuple
     below = (; edges..., T₂ = [prevfloat(Float32(0.01, RoundDown)), 2.0f0])
     err = @test_throws ArgumentError checkdomain(m, below)
     @test occursin("p.T₂", sprint(showerror, err.value))

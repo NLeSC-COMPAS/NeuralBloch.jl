@@ -5,8 +5,11 @@ The network is a surrogate for the FISP3D simulation of MR fingerprinting.
 From T₁, T₂ and B₁ of each voxel, it predicts the signal and its derivatives
 with respect to T₁ and T₂.
 
-The package contains the trained network as an ONNX file. On your machine,
-the package does these steps automatically:
+The package contains the trained network as a model bundle in `models/`:
+ONNX files and a card that describes them, written by NeuralBloch's
+`export_bundle`. The bundled model is `fisp600-rank16` version 1, trained
+for T₁ from 0.1 to 6 s, T₂ from 0.01 to 2 s with T₂ < T₁, and B₁ from 0.5
+to 1.5. On your machine, the package does these steps automatically:
 
 1. **Compile.** g++ compiles the C++ code of the package (`csrc/`) against
    your TensorRT. This occurs one time for each TensorRT version.
@@ -153,8 +156,9 @@ Notes:
 ## Accuracy and speed
 
 Against the training-data generator (the FISP3D EPG simulation of
-BlochSimulators.jl), the normalized mean absolute error is 0.56 % for the
-signal, 0.25 % for ∂T₁ and 0.45 % for ∂T₂.
+BlochSimulators.jl, with exact forward-sensitivity derivatives), the
+normalized mean absolute error over the training domain is 1.21 % for the
+signal, 0.70 % for ∂T₁ and 1.15 % for ∂T₂.
 
 On an RTX 2080 Ti, `predict!` takes 1.3 ms for 14400 voxels and 3.5 ms for
 40000 voxels. To measure on your machine, use `scripts/validate.jl`.

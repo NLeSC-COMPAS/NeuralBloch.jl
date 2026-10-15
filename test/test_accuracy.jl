@@ -19,8 +19,9 @@ if blocker(:T3) === nothing
     using ComputationalResources: CUDALibs
 end
 
-# Measured 0.5507 / 0.2485 / 0.4579 % on this set (2026-10-01), doubled.
-const ACCURACY_BOUNDS = (signal = 0.0110, ∂T₁ = 0.0050, ∂T₂ = 0.0092)
+# Measured 1.1837 / 0.6952 / 1.1449 % on this set for fisp600-rank16 v1
+# against forward sensitivity (2026-10-15), doubled.
+const ACCURACY_BOUNDS = (signal = 0.0237, ∂T₁ = 0.0140, ∂T₂ = 0.0229)
 
 # A fixed set inside the card's training domain, sampled as upstream samples
 # it: T₁, T₂ log-uniform, B₁ uniform, T₂ < T₁ (here capped at 0.8 T₁).
