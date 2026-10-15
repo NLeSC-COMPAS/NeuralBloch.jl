@@ -8,10 +8,12 @@ the network's low-rank basis. Each comes from its own TensorRT engine, which
 computes only that.
 
 The package contains the trained network as a model bundle in `models/`:
-ONNX files and a card that describes them, written by NeuralBloch's
-`export_bundle`. The bundled model is `fisp600-rank16` version 1, trained
-for T₁ from 0.1 to 6 s, T₂ from 0.01 to 2 s with T₂ < T₁, and B₁ from 0.5
-to 1.5. On your machine, the package does these steps automatically:
+an ONNX file for each of these three predictions, the RF tables of the
+training sequence, and a card that describes them, all written by
+NeuralBloch's `export_bundle`. The bundled model is `fisp600-rank16`
+version 1, trained for T₁ from 0.1 to 6 s, T₂ from 0.01 to 2 s with
+T₂ < T₁, and B₁ from 0.5 to 1.5. On your machine, the package does these
+steps automatically:
 
 1. **Compile.** g++ compiles the C++ code of the package (`csrc/`) against
    your TensorRT. This occurs one time for each TensorRT version.
@@ -158,8 +160,8 @@ Notes:
 - The coefficients are a `CuMatrix{Float32}`, indexed `[coefficient, voxel]`:
   the signal's coordinates in the network's rank-16 basis. The bundle does
   not include the basis.
-- `predict!` computes what its outputs ask for: `(; signal, ∂T₁, ∂T₂)`,
-  `(; signal)` or `(; coefficients)`.
+- `predict!` computes what its outputs ask for: `(; signal, ∂T₁, ∂T₂)` in
+  any order, `(; signal)` or `(; coefficients)`.
 - The input can be any object with the properties `T₁`, `T₂` and `B₁`.
 - For more information about a function, use the Julia help, for example
   `?predict!`.
@@ -186,6 +188,7 @@ julia --project -e 'using Pkg; Pkg.test()'
 
 The tests skip the parts that the machine cannot run, for example the GPU
 tests. Set `NEURALBLOCH_TEST_ALL=1` to make each skip a failure.
+
 Update the bundled model with a bundle from NeuralBloch's
 `uv run run.py export_bundle`:
 
@@ -196,6 +199,9 @@ julia --project dev/update_bundle.jl /path/to/NeuralBloch/outputs/bundle
 It installs the bundle into `models/`. A later version of the same family
 must keep the family's contract: the same readouts, rank, sequence and RF
 tables, a training domain that is the same or wider, and a higher version.
-Otherwise the script changes nothing and lists the differences. Then run the
-tests and `scripts/validate.jl`, whose accuracy thresholds belong to the
-model they were measured on.
+Otherwise the script changes nothing and lists the differences. The tests
+and `scripts/validate.jl` pin the bundled model: its card's values, such as
+the version, hashes and domain (`test/test_model.jl`,
+`test/test_predict.jl`), and the accuracy measured on it
+(`test/test_accuracy.jl`, the thresholds in `scripts/validate.jl`). Update
+them for the new bundle, then run both.
