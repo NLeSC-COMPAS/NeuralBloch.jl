@@ -27,7 +27,8 @@ using Printf, Statistics
 include("reference.jl")
 
 # NMAE thresholds per output: 1.05 × what this set measured for
-# fisp600-rank16 v1 on 2026-10-15, rounded up (dev/NOTES.md). A different
+# fisp600-rank16 v1 on 2026-10-15, and again for 0.1.0-beta.1, the same
+# network, rounded up (dev/NOTES.md). A different
 # build of the same ONNX moves NMAE in the sixth digit; a real regression
 # moves the second.
 const THRESHOLDS = (signal = 0.0128, ∂T₁ = 0.0074, ∂T₂ = 0.0121)

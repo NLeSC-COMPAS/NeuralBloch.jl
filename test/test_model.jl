@@ -1,30 +1,38 @@
 # model.jl: the bundle (ONNX per target, card, RF tables) and its checks. Julia only.
 
 using NeuralBloch: Model, BundleError, TARGETS, contract_problems
+using Pkg.Artifacts: artifact_hash, artifact_path
 using SHA: sha256
 using Tar: Tar
 using TOML: TOML
 
-const BUNDLE = joinpath(pkgdir(NeuralBloch), "models")
+# The default bundle: the artifact Pkg installed with the package.
+const BUNDLE = Model().dir
 
-# The sha256 the bundled card pins for each target's ONNX model.
-const PINNED = (signal_and_derivatives = "b4797fa23fad6e1bd8c289ae5d06e929103d4223c090926c6199c35e25fde1b5",
-                signal = "d2f1e74b4ea561eeffd5d16406b42138e51df921d5a6f734869c0e28c3241a88",
-                coefficients = "2f76136bdecc847682755d279c9cb78bba241b8ca8f2be5f20e1fe59991d60d7")
+# The sha256 the default card pins for each target's ONNX model.
+const PINNED = (signal_and_derivatives = "757a2fd6a70e4ac6aad3b89596ea0c6f63f17d8353c97169cc43db9c86947cf4",
+                signal = "0e23650b9df0b2680c40c2a7f13a6fd1e607195a3f844baca0920de7f9ea8c25",
+                coefficients = "c5e5b642208c941b87896791853b5e423f3a842fb6bd38a8cb6c1edcb1d4f0bc")
 
-# A private copy of the bundle whose card.toml is `edit`(original text).
+# A private copy of the bundle whose card.toml is `edit`(original text). The
+# artifact's files are read-only, and cp keeps their mode, so the copy's are
+# made writable.
 function edited_bundle(edit, dir)
-    b = joinpath(dir, "models")
+    b = joinpath(dir, "bundle")
     cp(BUNDLE, b)
+    for (root, _, names) in walkdir(b), name in names
+        chmod(joinpath(root, name), 0o644)
+    end
     card = joinpath(b, "card.toml")
     write(card, edit(read(card, String)))
     return b
 end
 
-tier(:T0, "model: the bundled card") do
+tier(:T0, "model: the default bundle") do
     m = Model()
-    @test m.dir == BUNDLE
-    @test (m.family, m.version, m.ntr, m.rank) == ("fisp600-rank16", 1, 600, 16)
+    # The artifact that Artifacts.toml binds
+    @test m.dir == artifact_path(artifact_hash("neuralbloch_fisp600_rank16", joinpath(pkgdir(NeuralBloch), "Artifacts.toml")))
+    @test (m.family, m.version, m.ntr, m.rank) == ("fisp600-rank16", v"0.1.0-beta.1", 600, 16)
     @test m.onnx == (signal_and_derivatives = joinpath(BUNDLE, "model.onnx"),
                      signal = joinpath(BUNDLE, "model_signal.onnx"),
                      coefficients = joinpath(BUNDLE, "model_coefficients.onnx"))
@@ -40,11 +48,11 @@ tier(:T0, "model: the bundled card") do
     @test length(s.rf_angle) == length(s.rf_phase) == 600
     @test (s.rf_angle[1], s.rf_angle[end]) == (3.960833, parse(Float64, last(readlines(joinpath(BUNDLE, "rf_data", "rf_angle_list.txt")))))
     @test s.rf_phase[1] == -1.9641
-    @test m.provenance["upstream"] == "NeuralBloch@d5c288465a8b54b146b5ed595837ccceb6b4756e"
+    @test m.provenance["upstream"] == "NeuralBloch@f27c651a4b765252c7ee080f566eda0313b6bf4f"
     @test (m.provenance["checkpoint_epoch"], m.provenance["blochsimulators"], m.provenance["precision"]) ==
           ("4970", "0.10.0", "FP32")
     @test occursin(r"^[0-9a-f]{64}$", m.provenance["config_sha256"])
-    @test sprint(show, m) == "Model($(repr(BUNDLE)); fisp600-rank16 v1, ntr = 600, rank = 16)"
+    @test sprint(show, m) == "Model($(repr(BUNDLE)); fisp600-rank16 v0.1.0-beta.1, ntr = 600, rank = 16)"
 end
 
 tier(:T0, "model: a forward-difference card states its steps") do
@@ -58,10 +66,12 @@ end
 
 tier(:T0, "model: malformed cards") do
     sensitivity = "method = \"forward sensitivity\""
+    version = "version = \"0.1.0-beta.1\""
+    semantic = "[model] version must be a semantic version MAJOR.MINOR.PATCH[-PRERELEASE] without build metadata"
     cases = [  # edit of the card => words the error must contain
-        (s -> replace(s, r"format = 2[^\n]*\n" => "")) => "has no format",
-        (s -> replace(s, "format = 2" => "format = 1")) => "has card format 1; this NeuralBloch reads format 2",
-        (s -> replace(s, "format = 2" => "format = \"2\"")) => "has card format \"2\"",
+        (s -> replace(s, r"format = 3[^\n]*\n" => "")) => "has no format",
+        (s -> replace(s, "format = 3" => "format = 2")) => "has card format 2; this NeuralBloch reads format 3",
+        (s -> replace(s, "format = 3" => "format = \"3\"")) => "has card format \"3\"",
         (s -> replace(s, r"\[domain\].*?\n\n"s => "")) => "table [domain] is missing",
         (s -> replace(s, r"\nntr = 600[^\n]*" => "")) => "[model] ntr is missing",
         (s -> replace(s, "ntr = 600" => "ntr = \"600\"")) => "[model] ntr must be an integer",
@@ -71,7 +81,12 @@ tier(:T0, "model: malformed cards") do
         (s -> replace(s, "rank = 16" => "rank = 12")) => "states rank 16, but [model] rank is 12",
         (s -> replace(s, "family = \"fisp600-rank16\"" => "family = \"FISP600\"")) => "[model] family \"FISP600\" must be",
         (s -> replace(s, "family = \"fisp600-rank16\"" => "family = \"fisp600-r16\"")) => "exactly one of them rank<N>",
-        (s -> replace(s, "version = 1" => "version = 0")) => "[model] version must be positive, not 0",
+        (s -> replace(s, r"\nversion = [^\n]*" => "")) => "[model] version is missing",
+        (s -> replace(s, version => "version = 1")) => "$semantic, e.g. \"0.1.0-beta.1\", not 1",
+        (s -> replace(s, version => "version = \"v0.1.0\"")) => semantic,
+        (s -> replace(s, version => "version = \"01.0.0\"")) => semantic,
+        (s -> replace(s, version => "version = \"0.1.0-beta.01\"")) => semantic,
+        (s -> replace(s, version => "version = \"0.1.0+build.1\"")) => semantic,
         (s -> replace(s, r"\[model\.coefficients\].*?\n\n"s => "")) => "table [model.coefficients] is missing",
         (s -> replace(s, "T1 = [0.1, 6.0]" => "T1 = [6.0, 0.1]")) => "[domain] T1 must be two numbers [low, high] with low < high",
         (s -> replace(s, "T1 = [0.1, 6.0]" => "T1 = [0.1]")) => "[domain] T1 must be two numbers",
@@ -131,18 +146,22 @@ end
 
 tier(:T0, "model: a family's contract between versions") do
     current = Model()
-    # A later bundle: version 2 with `edit` applied to its card, and `files`
+    # A later bundle: `version` with `edit` applied to its card, and `files`
     # applied to its directory.
-    function later(edit; version = 2, files = identity)
+    function later(edit; version = "0.1.0-beta.2", files = identity)
         dir = mktempdir()
-        b = edited_bundle(s -> edit(replace(s, "version = 1" => "version = $version")), dir)
+        b = edited_bundle(s -> edit(replace(s, "version = \"0.1.0-beta.1\"" => "version = \"$version\"")), dir)
         files(b)
         return Model(b)
     end
     @test contract_problems(current, later(identity)) == String[]
+    @test contract_problems(current, later(identity; version = "0.1.0")) == String[]   # the release after its betas
     @test contract_problems(current, later(s -> replace(s, "T1 = [0.1, 6.0]" => "T1 = [0.05, 7.0]"))) == String[]
     cases = [  # the later bundle => words one of the problems must contain
-        later(identity; version = 1) => "version 1 does not follow version 1",
+        later(identity; version = "0.1.0-beta.1") => "version 0.1.0-beta.1 does not follow version 0.1.0-beta.1",
+        # semantic-version order: alpha before beta, a pre-release before its release
+        later(identity; version = "0.1.0-alpha.9") => "version 0.1.0-alpha.9 does not follow version 0.1.0-beta.1",
+        later(identity; version = "0.0.9") => "version 0.0.9 does not follow version 0.1.0-beta.1",
         later(s -> replace(s, "B1 = [0.5, 1.5]" => "B1 = [0.6, 1.5]")) =>
             "domain B1 [0.5, 1.5] → [0.6, 1.5] does not contain the previous range",
         later(s -> replace(s, "T2 = [0.01, 2.0]" => "T2 = [0.01, 1.0]")) => "domain T2",
@@ -167,49 +186,8 @@ tier(:T0, "model: a family's contract between versions") do
     @test contract_problems(current, other) == String[]
 end
 
-# dev/update_bundle.jl's functions, for its main in this process: a Julia
+# dev/bind_bundle.jl's functions, for its main in this process: a Julia
 # process per call would take seconds to start.
-module UpdateBundle
-include(joinpath(@__DIR__, "..", "dev", "update_bundle.jl"))
-end
-
-tier(:T0, "model: update_bundle.jl installs within the family's contract") do
-    function update(src, dest)
-        out, err = IOBuffer(), IOBuffer()
-        code = UpdateBundle.main([src, dest]; stdout = out, stderr = err)
-        return code == 0, String(take!(out)), String(take!(err))
-    end
-    mktempdir() do dir
-        dest = edited_bundle(identity, mkpath(joinpath(dir, "dest")))           # v1, as bundled
-        v2 = edited_bundle(s -> replace(s, "version = 1" => "version = 2", "T1 = [0.1, 6.0]" => "T1 = [0.1, 7.0]"),
-                           mkpath(joinpath(dir, "v2")))
-        write(joinpath(v2, "stray.txt"), "not named by the card")
-        # Once as the command the README gives (read throws unless it exits with 0)
-        script = joinpath(pkgdir(NeuralBloch), "dev", "update_bundle.jl")
-        cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project()) $script $v2 $dest`
-        @test occursin("Installed fisp600-rank16 v2", read(cmd, String))
-        @test (Model(dest).version, Model(dest).domain.T1) == (2, (0.1, 7.0))
-        @test !isfile(joinpath(dest, "stray.txt"))                             # only what the card names
-        @test readdir(dirname(dest)) == ["models"]                             # no temporaries left
-
-        ok, out, _ = update(v2, dest)
-        @test ok && occursin("already holds fisp600-rank16 v2", out)
-
-        narrower = edited_bundle(s -> replace(s, "version = 1" => "version = 3", "B1 = [0.5, 1.5]" => "B1 = [0.6, 1.5]"),
-                                 mkpath(joinpath(dir, "narrower")))
-        before = read(joinpath(dest, "card.toml"))
-        ok, _, err = update(narrower, dest)
-        @test !ok && occursin("domain B1 [0.5, 1.5] → [0.6, 1.5]", err)
-        @test read(joinpath(dest, "card.toml")) == before                      # unchanged
-
-        broken = edited_bundle(s -> replace(s, "format = 2" => "format = 3"), mkpath(joinpath(dir, "broken")))
-        ok, _, err = update(broken, dest)
-        @test !ok && occursin("Refusing", err) && occursin("format 3", err)
-        @test read(joinpath(dest, "card.toml")) == before
-    end
-end
-
-# dev/bind_bundle.jl's functions, for its main in this process.
 module BindBundle
 include(joinpath(@__DIR__, "..", "dev", "bind_bundle.jl"))
 end
@@ -233,7 +211,7 @@ tier(:T0, "model: bind_bundle.jl binds a release file within the family's contra
         # Version `version` of the bundle as a release file named `name`, with
         # `edit` applied to its card and `files` to its directory
         function release(edit, version; files = identity, name = basename(url(version)))
-            b = edited_bundle(s -> edit(replace(s, "version = 1" => "version = $version")),
+            b = edited_bundle(s -> edit(replace(s, "version = \"0.1.0-beta.1\"" => "version = \"$version\"")),
                               mkpath(joinpath(dir, "v$version")))
             files(b)
             return release_file(b, joinpath(dir, name))
@@ -249,28 +227,30 @@ tier(:T0, "model: bind_bundle.jl binds a release file within the family's contra
             return code == 0, String(take!(out)), String(take!(err))
         end
 
-        v1 = release(identity, 1)
+        v1 = release(identity, "0.1.0-beta.1")
         ok, out, _ = bind(v1)
-        @test ok && occursin("Bound fisp600-rank16 v1 as neuralbloch_fisp600_rank16", out)
+        @test ok && occursin("Bound fisp600-rank16 v0.1.0-beta.1 as neuralbloch_fisp600_rank16", out)
         @test entry()["git-tree-sha1"] == Tar.tree_hash(`gzip -dc $v1`)
-        @test entry()["download"] == [Dict("sha256" => bytes2hex(open(sha256, v1)), "url" => url(1))]
+        @test entry()["download"] == [Dict("sha256" => bytes2hex(open(sha256, v1)), "url" => url("0.1.0-beta.1"))]
         @test !haskey(entry(), "lazy")                                       # downloaded with the package
         ok, out, _ = bind(v1)
-        @test ok && occursin("already binds fisp600-rank16 v1", out)
+        @test ok && occursin("already binds fisp600-rank16 v0.1.0-beta.1", out)
 
-        v2 = release(s -> replace(s, "T1 = [0.1, 6.0]" => "T1 = [0.1, 7.0]"), 2)
+        v2 = release(s -> replace(s, "T1 = [0.1, 6.0]" => "T1 = [0.1, 7.0]"), "0.1.0-beta.2")
         ok, _, _ = bind(v2)
-        @test ok && entry()["download"][1]["url"] == url(2)
+        @test ok && entry()["download"][1]["url"] == url("0.1.0-beta.2")
         before = read(toml)
         truncated = joinpath(dir, "truncated.tar.gz")
         write(truncated, read(v2)[1:1000])
         cases = [  # a release file to refuse => words the refusal must contain
-            release(s -> replace(s, "B1 = [0.5, 1.5]" => "B1 = [0.6, 1.5]"), 3) =>
+            release(s -> replace(s, "B1 = [0.5, 1.5]" => "B1 = [0.6, 1.5]"), "0.1.0-beta.3") =>
                 "domain B1 [0.5, 1.5] → [0.6, 1.5]",
-            release(identity, 4; files = b -> write(joinpath(b, "stray.txt"), "not named by the card")) =>
+            release(identity, "0.1.0-alpha.1") => "version 0.1.0-alpha.1 does not follow version 0.1.0-beta.2",
+            release(identity, "0.1.0-beta.4"; files = b -> write(joinpath(b, "stray.txt"), "not named by the card")) =>
                 "files its card does not name: stray.txt",
-            release(identity, 5; name = basename(url(6))) => "must be named $(basename(url(5)))",
-            release(s -> replace(s, "format = 2" => "format = 9"), 7) => "has card format 9",
+            release(identity, "0.1.0-beta.5"; name = basename(url("0.1.0-beta.6"))) =>
+                "must be named $(basename(url("0.1.0-beta.5")))",
+            release(s -> replace(s, "format = 3" => "format = 9"), "0.1.0-beta.7") => "has card format 9",
             truncated => "not a gzip-compressed tarball",
         ]
         for (file, words) in cases
@@ -283,7 +263,7 @@ tier(:T0, "model: bind_bundle.jl binds a release file within the family's contra
         # the local file, installs into an empty depot, with neither the
         # package server nor the network
         offline = joinpath(dir, "Offline.toml")
-        write(offline, replace(read(toml, String), url(2) => "file://$v2"))
+        write(offline, replace(read(toml, String), url("0.1.0-beta.2") => "file://$v2"))
         fresh = mkpath(joinpath(dir, "fresh"))
         code = "using Pkg.Artifacts; print(ensure_artifact_installed(\"neuralbloch_fisp600_rank16\", $(repr(offline))))"
         env = merge(ENV, Dict("JULIA_DEPOT_PATH" => fresh * ":", "JULIA_PKG_SERVER" => ""))
@@ -292,10 +272,10 @@ tier(:T0, "model: bind_bundle.jl binds a release file within the family's contra
 
         # Once as the command the README gives (read throws unless it exits with 0)
         script = joinpath(pkgdir(NeuralBloch), "dev", "bind_bundle.jl")
-        v8 = release(s -> replace(s, "T1 = [0.1, 6.0]" => "T1 = [0.1, 8.0]"), 8)
+        v8 = release(s -> replace(s, "T1 = [0.1, 6.0]" => "T1 = [0.1, 8.0]"), "0.1.0-beta.8")
         env = merge(ENV, Dict("JULIA_DEPOT_PATH" => join([depot; DEPOT_PATH], ':')))
         cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project()) $script $v8 $toml`
-        @test occursin("Bound fisp600-rank16 v8", read(setenv(cmd, env), String))
-        @test entry()["download"][1]["url"] == url(8)
+        @test occursin("Bound fisp600-rank16 v0.1.0-beta.8", read(setenv(cmd, env), String))
+        @test entry()["download"][1]["url"] == url("0.1.0-beta.8")
     end
 end

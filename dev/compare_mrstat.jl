@@ -10,7 +10,7 @@
 # runs through this package's own TensorRT layer: libnb-trtinfer.so opens any
 # engine of the installed TensorRT version. The comparison means something
 # only when both engines come from the same model: since the fisp600-rank16
-# v1 bundle, rebuild upstream's engine and re-run MRSTAT's bootstrap.sh first.
+# bundle, rebuild upstream's engine and re-run MRSTAT's bootstrap.sh first.
 # The evaluation set now follows the card's domain, so it is MRSTAT's set
 # only on the previous card's domain.
 

@@ -48,4 +48,5 @@ end
 
 # --- fixtures -------------------------------------------------------------------
 
-const ONNX = joinpath(pkgdir(NeuralBloch), "models", "model.onnx")
+# The default bundle's signal-and-derivatives model, in its artifact.
+const ONNX = Model().onnx.signal_and_derivatives

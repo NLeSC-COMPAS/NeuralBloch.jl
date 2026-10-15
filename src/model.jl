@@ -1,7 +1,9 @@
 # L2: the model bundle — an ONNX model per target, the card, and the RF tables
 # of the sequence the network was trained on. NeuralBloch's export_bundle
-# writes the bundle; nothing in it is edited here. The card (models/card.toml)
-# uses ASCII names (T1, dT1, …); io.jl converts them for the public API.
+# writes the bundle and NeuralBloch publishes it as a release, which Pkg
+# installs with this package as an artifact (Artifacts.toml); nothing in it
+# is edited here. The card (card.toml) uses ASCII names (T1, dT1, …); io.jl
+# converts them for the public API.
 
 """
     BundleError(msg)
@@ -20,7 +22,7 @@ const Range = Tuple{Float64,Float64}
 
 # The card format this package reads: the one NeuralBloch's export_bundle
 # writes (scripts/export_bundle.py, FORMAT).
-const FORMAT = 2
+const FORMAT = 3
 
 # What the model can compute, each from its own ONNX model and engine:
 #   signal_and_derivatives  signal, ∂T₁, ∂T₂   (upstream FCModel.forward)
@@ -42,27 +44,40 @@ const DERIVATIVE_METHODS = ("forward sensitivity", "forward difference")
 # lowercase words joined by hyphens, exactly one of them rank<N>.
 const FAMILY_PATTERN = r"^[a-z0-9]+(-[a-z0-9]+)*$"
 
+# A version is a semantic version without build metadata, as NeuralBloch's
+# export_bundle writes it (scripts/export_bundle.py, SEMVER): MAJOR.MINOR.PATCH,
+# optionally with a pre-release such as -beta.1. VersionNumber then orders
+# versions as semantic versions; on its own it would also take "1", "v0.1.0"
+# or "01.0.0".
+const PRERELEASE_PART = raw"(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
+const SEMVER = Regex(raw"\A(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)" *
+                     "(?:-$PRERELEASE_PART(?:\\.$PRERELEASE_PART)*)?" * raw"\z")
+
 """
-    Model(dir = the bundled model)
+    Model(dir = the fisp600-rank16 artifact)
 
 A NeuralBloch model bundle: `dir/card.toml` and the files it names, an ONNX
-model per target and the RF tables. Loading checks all of it: the card's
-format, every field present and well-typed, each ONNX's sha256 the one the
-card pins, and the RF tables with one entry per readout. Any problem is a
+model per target and the RF tables. Without `dir`, the `fisp600-rank16`
+bundle that this package's Artifacts.toml binds, which Pkg downloads from
+NeuralBloch's release when it installs the package; any other bundle, such as
+your own export, is read from its directory. Loading checks all of it: the
+card's format, every field present and well-typed, each ONNX's sha256 the one
+the card pins, and the RF tables with one entry per readout. Any problem is a
 [`BundleError`](@ref).
 
-The fields hold the card: `family` and `version` (the model's name, e.g.
-`fisp600-rank16` version 1), `ntr` (readouts per voxel), `rank` (signal basis
-coefficients per voxel), `onnx` and `sha256` (per target:
-`signal_and_derivatives`, `signal`, `coefficients`), `domain` (training
-ranges of T1, T2 and B1), `constraint`, `derivatives` (how the training
-targets were computed: the method, and the steps of forward differences),
-`sequence` (the FISP3D sequence, RF tables in degrees) and `provenance`.
+The fields hold the card: `family` and `version` (the model's name: a family
+such as `fisp600-rank16` and a semantic version such as `v"0.1.0-beta.1"`),
+`ntr` (readouts per voxel), `rank` (signal basis coefficients per voxel),
+`onnx` and `sha256` (per target: `signal_and_derivatives`, `signal`,
+`coefficients`), `domain` (training ranges of T1, T2 and B1), `constraint`,
+`derivatives` (how the training targets were computed: the method, and the
+steps of forward differences), `sequence` (the FISP3D sequence, RF tables in
+degrees) and `provenance`.
 """
 struct Model
     dir::String
     family::String
-    version::Int
+    version::VersionNumber
     ntr::Int
     rank::Int
     onnx::NamedTuple{TARGETS,NTuple{3,String}}
@@ -82,6 +97,8 @@ describe(::Type{Int}) = "an integer"
 describe(::Type{Bool}) = "true or false"
 describe(::Type{String}) = "a string"
 describe(::Type{Range}) = "two numbers [low, high] with low < high"
+describe(::Type{VersionNumber}) =
+    "a semantic version MAJOR.MINOR.PATCH[-PRERELEASE] without build metadata, e.g. \"0.1.0-beta.1\""
 
 isnumber(x) = x isa Real && !(x isa Bool)
 
@@ -99,6 +116,7 @@ function field(card, path, table, key, ::Type{T}) where {T}
     T === Int && v isa Integer && !(v isa Bool) && return Int(v)
     T === Bool && v isa Bool && return v
     T === String && v isa AbstractString && return String(v)
+    T === VersionNumber && v isa AbstractString && occursin(SEMVER, v) && return VersionNumber(v)
     if T === Range && v isa AbstractVector && length(v) == 2 && all(isnumber, v) && v[1] < v[2]
         return (Float64(v[1]), Float64(v[2]))
     end
@@ -133,7 +151,7 @@ function familyrank(family)
     return length(ranks) == 1 ? parse(Int, ranks[1]) : nothing
 end
 
-function Model(dir::AbstractString = joinpath(pkgdir(@__MODULE__), "models"))
+function Model(dir::AbstractString = artifact"neuralbloch_fisp600_rank16")
     dir = abspath(dir)
     path = joinpath(dir, "card.toml")
     isfile(path) || throw(BundleError("$dir has no card.toml: it is not a model bundle"))
@@ -155,7 +173,7 @@ function Model(dir::AbstractString = joinpath(pkgdir(@__MODULE__), "models"))
         "$path has card format $(repr(format)); this NeuralBloch reads format $FORMAT"))
 
     family = need(String, "model", "family")
-    version = positive(Int, "model", "version")
+    version = need(VersionNumber, "model", "version")
     ntr = positive(Int, "model", "ntr")
     rank = positive(Int, "model", "rank")
     stated = familyrank(family)
@@ -224,8 +242,9 @@ What keeps bundle `new` from replacing `current` as a later version of the
 same model family; empty when nothing does. Within a family, callers rely on
 the readouts, the rank, the sequence (RF tables included) and the domain
 constraint staying the same, on the training domain staying the same or
-growing, and on the version going up. Two different families share no
-contract, so `new` of another family has no problems here.
+growing, and on the version going up in semantic-version order
+(0.1.0-beta.1 < 0.1.0-beta.2 < 0.1.0 < 0.1.1). Two different families share
+no contract, so `new` of another family has no problems here.
 """
 function contract_problems(current::Model, new::Model)
     current.family == new.family || return String[]

@@ -13,6 +13,10 @@
 # D18), to what the development setup predicts, which scripts/validate.jl
 # checks against EPG.
 #
+# The model bundle is the artifact Artifacts.toml binds: Pkg.add downloads it
+# from NeuralBloch's release into the fresh depot and checks both its hashes.
+# Until that release exists, the install fails; run this after publishing it.
+#
 # Everything lands in a temporary directory under tempdir(), removed at the
 # end. The exit code is 1 if a check fails.
 
@@ -45,6 +49,7 @@ using NeuralBloch, CUDACore
 check(name, ok) = println("check: ", name, " ", ok)
 pkg = pkgdir(NeuralBloch)
 check("installed from the depot", startswith(pkg, first(DEPOT_PATH)))
+check("bundle downloaded into the depot", startswith(Model().dir, first(DEPOT_PATH)))
 check("no git repositories next to the package", !any(d -> isdir(joinpath(pkg, "..", d, ".git")), readdir(dirname(pkg))))
 # Read-only, whatever Pkg did: nothing may ever be written there.
 run(`chmod -R a-w $pkg`)
@@ -98,7 +103,7 @@ function main()
         println(passed ? "PASS  " : "FAIL  ", name)
     end
     println("first use in the fresh depot: ", round(t / 60; digits = 1), " minutes, downloads included")
-    good = ok && length(checks) == 5 + length(TARGETS) && all(last, checks)
+    good = ok && length(checks) == 6 + length(TARGETS) && all(last, checks)
     println(good ? "Distribution test passed." : "Distribution test FAILED.")
     rm(root; recursive = true, force = true)
     return good
