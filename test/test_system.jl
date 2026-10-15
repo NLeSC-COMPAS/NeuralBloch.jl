@@ -99,6 +99,10 @@ tier(:T0, "system: report") do
     @test occursin("not found", text)
     @test occursin("sudo apt-get install libnvinfer11 libnvonnxparsers11", text)
     @test occursin("no driver", text)
+    withenv("TENSORRT_ROOT" => "/opt/trt") do        # where the headers were looked for, in order
+        @test occursin("not found in /opt/trt/include, /usr/include/$(Sys.ARCH)-linux-gnu or /usr/include",
+                       Dict(TensorRT.problems(none))[:headers])
+    end
 
     # Headers from another TensorRT release than the library.
     lib = TensorRT.Library("/usr/lib/libnvinfer.so.11", v"11.2.1+2")

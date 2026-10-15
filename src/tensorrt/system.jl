@@ -133,8 +133,11 @@ const MAJORS = (11, 12, 10)
 # searched before the system's.
 root_dirs(sub...) = haskey(ENV, "TENSORRT_ROOT") ? [joinpath(ENV["TENSORRT_ROOT"], s) for s in sub] : String[]
 
+# Where TensorRT's headers are looked for, in this order.
+header_dirs() = [root_dirs("include"); "/usr/include/$(Sys.ARCH)-linux-gnu"; "/usr/include"]
+
 function find_headers()
-    for dir in [root_dirs("include"); "/usr/include/$(Sys.ARCH)-linux-gnu"; "/usr/include"]
+    for dir in header_dirs()
         all(f -> isfile(joinpath(dir, f)), ("NvInfer.h", "NvOnnxParser.h", "NvInferVersion.h")) || continue
         v = parse_header_version(read(joinpath(dir, "NvInferVersion.h"), String))
         v === nothing || return Headers(dir, v)
@@ -257,7 +260,7 @@ function problems(sys::System; gpu::Bool = true)
         push!(p, :onnxparser => "TensorRT's ONNX parser library (libnvonnxparser.so.N) not found")
     if hdr === nothing
         push!(p, :headers => "TensorRT's headers (NvInfer.h, NvOnnxParser.h) not found in " *
-                             "/usr/include/$(Sys.ARCH)-linux-gnu or /usr/include")
+                             join(header_dirs(), ", ", " or "))
     elseif lib !== nothing && (hdr.version.major, hdr.version.minor) != (lib.version.major, lib.version.minor)
         push!(p, :headers => "TensorRT's headers in $(hdr.dir) are version $(vstring(hdr.version)), " *
                              "the library is $(vstring(lib.version))")

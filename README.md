@@ -50,9 +50,11 @@ This example uses [pixi](https://pixi.sh). Any conda-compatible tool works
 the same way.
 
 1. Choose the CUDA version. Your GPU driver limits it. Run `nvidia-smi` and
-   read `CUDA Version` in the top right. If it shows 13.0 or higher, you can
-   use `13.*`. If it shows 12.x, you must use `12.*`: a TensorRT for CUDA 13
-   does not run on that driver.
+   read the CUDA version in the top right (`CUDA Version` or
+   `CUDA UMD Version`), for example 13.3. Use exactly that major and minor
+   version, as `13.3.*`. With `13.*` or `12.*`, pixi installs the newest
+   CUDA of that major, which can be newer than your driver. A TensorRT for
+   CUDA 13 does not run on a driver for CUDA 12.x at all.
 
 2. Make a folder with this `pixi.toml`:
 
@@ -63,7 +65,7 @@ the same way.
    platforms = ["linux-64"]
 
    [dependencies]
-   cuda-version = "12.*"          # from step 1
+   cuda-version = "13.3.*"        # from step 1
    libnvinfer = "11.*"
    libnvinfer-devel = "11.*"
    libnvonnxparser = "11.*"
