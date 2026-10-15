@@ -111,10 +111,11 @@ tier(:T0, "model: RF tables must match ntr") do
 end
 
 tier(:T0, "model: each ONNX must be the one the card pins") do
+    bundled = Model()
     for target in TARGETS
         mktempdir() do dir
             b = edited_bundle(identity, dir)
-            file = basename(Model().onnx[target])
+            file = basename(bundled.onnx[target])
             write(joinpath(b, file), read(joinpath(b, file))[1:end-1])
             err = @test_throws BundleError Model(b)
             msg = sprint(showerror, err.value)
@@ -163,21 +164,27 @@ tier(:T0, "model: a family's contract between versions") do
     @test contract_problems(current, other) == String[]
 end
 
+# dev/update_bundle.jl's functions, for its main in this process: a Julia
+# process per call would take seconds to start.
+module UpdateBundle
+include(joinpath(@__DIR__, "..", "dev", "update_bundle.jl"))
+end
+
 tier(:T0, "model: update_bundle.jl installs within the family's contract") do
-    script = joinpath(pkgdir(NeuralBloch), "dev", "update_bundle.jl")
     function update(src, dest)
         out, err = IOBuffer(), IOBuffer()
-        cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project()) $script $src $dest`
-        ok = success(pipeline(cmd; stdout = out, stderr = err))
-        return ok, String(take!(out)), String(take!(err))
+        code = UpdateBundle.main([src, dest]; stdout = out, stderr = err)
+        return code == 0, String(take!(out)), String(take!(err))
     end
     mktempdir() do dir
         dest = edited_bundle(identity, mkpath(joinpath(dir, "dest")))           # v1, as bundled
         v2 = edited_bundle(s -> replace(s, "version = 1" => "version = 2", "T1 = [0.1, 6.0]" => "T1 = [0.1, 7.0]"),
                            mkpath(joinpath(dir, "v2")))
         write(joinpath(v2, "stray.txt"), "not named by the card")
-        ok, out, _ = update(v2, dest)
-        @test ok && occursin("Installed fisp600-rank16 v2", out)
+        # Once as the command the README gives (read throws unless it exits with 0)
+        script = joinpath(pkgdir(NeuralBloch), "dev", "update_bundle.jl")
+        cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project()) $script $v2 $dest`
+        @test occursin("Installed fisp600-rank16 v2", read(cmd, String))
         @test (Model(dest).version, Model(dest).domain.T1) == (2, (0.1, 7.0))
         @test !isfile(joinpath(dest, "stray.txt"))                             # only what the card names
         @test readdir(dirname(dest)) == ["models"]                             # no temporaries left

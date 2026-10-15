@@ -20,6 +20,7 @@
 # appendix A's method, so the numbers compare directly.
 
 using NeuralBloch
+using NeuralBloch: TARGETS
 using CUDACore: CUDACore, synchronize
 using Printf, Statistics
 
@@ -91,7 +92,7 @@ function allocations(out, engine, p; calls = 100)
     synchronize()
     return host, device, Base.GC_Diff(Base.gc_num(), gc0).pause
 end
-for target in (:signal_and_derivatives, :signal, :coefficients)
+for target in TARGETS
     host, device, gcs = allocations(outputs(engine, N; target), engine, p)
     @printf("   %-23s host %d bytes, GPU %d bytes, %d GCs   %s\n", target, host, device, gcs,
             verdict!("memory, $target", host == 0 && device == 0 && gcs == 0))
@@ -105,19 +106,17 @@ println("   ", rpad("N", 8), rpad("predict!", 11), rpad("signal", 9), rpad("coef
 appendix_a = Dict(10000 => 1.03, 14400 => 1.30, 40000 => 3.43)
 for n in (1000, 10000, 14400, 40000)
     q = gpu_voxels(evaluation_set(model, n; seed = n))
-    full, signal, coefficients = (outputs(engine, n; target) for target in (:signal_and_derivatives, :signal,
-                                                                             :coefficients))
-    t_full = latency(() -> predict!(full, engine, q))
-    t_signal = latency(() -> predict!(signal, engine, q))
-    t_coefficients = latency(() -> predict!(coefficients, engine, q))
+    outs = NamedTuple{TARGETS}(map(target -> outputs(engine, n; target), TARGETS))
+    ms = map(out -> latency(() -> predict!(out, engine, q)), outs)      # the first three columns, in order
+    full = outs.signal_and_derivatives
     submit = host_submission(() -> predict!(full, engine, q))
     predict!(full, engine, q)                                  # binds this batch; then the run alone
     t_engine = latency(() -> NeuralBloch.TensorRT.run!(engine.targets.signal_and_derivatives.handle))
-    @printf("   %-8d%-11.3f%-9.3f%-14.3f%-14.3f%-10.1f%s\n", n, t_full, t_signal, t_coefficients, t_engine, submit,
+    @printf("   %-8d%-11.3f%-9.3f%-14.3f%-14.3f%-10.1f%s\n", n, values(ms)..., t_engine, submit,
             haskey(appendix_a, n) ? @sprintf("%.2f", appendix_a[n]) : "—")
     if n == 14400
-        @printf("   at 14400 voxels: %.3f ms against a target of %.2f ms   %s\n", t_full, LATENCY_TARGET_MS,
-                verdict!("speed", t_full ≤ LATENCY_TARGET_MS))
+        @printf("   at 14400 voxels: %.3f ms against a target of %.2f ms   %s\n", ms.signal_and_derivatives,
+                LATENCY_TARGET_MS, verdict!("speed", ms.signal_and_derivatives ≤ LATENCY_TARGET_MS))
     end
 end
 

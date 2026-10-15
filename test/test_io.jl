@@ -4,7 +4,7 @@
 
 using NeuralBloch: BundleError, publicname, cardname, resolve_io, input_problem, output_problem,
                    layout_problem, overlap_problem, batch_problem, alignment, checkinputs, checkoutputs,
-                   outputlayout
+                   targetof, outputlayout
 using NeuralBloch.TensorRT: TensorInfo
 using CUDACore: CuArray, CuMatrix, CuVector, DeviceMemory
 
@@ -31,32 +31,35 @@ tier(:T0, "io: engine against card") do
     @test resolve(GOOD[[4, 2, 1, 3]]) == (x = 2, signal = 1, ∂T₁ = 3, ∂T₂ = 0)
     @test resolve(SIGNAL, :signal) == (x = 0, signal = 1)
     @test resolve(COEFFICIENTS, :coefficients) == (x = 1, coefficients = 0)
-    broken = [  # engine description, target => words the BundleError must contain
-        (GOOD[1:3], :signal_and_derivatives) => "no output dT2",
-        ([GOOD; out_info("extra")], :signal_and_derivatives) => "unexpected tensor extra",
-        ([x_info(input = false); GOOD[2:4]], :signal_and_derivatives) => "no input x",
-        ([x_info(eltype = Float16); GOOD[2:4]], :signal_and_derivatives) => "x is Float16",
-        ([x_info(shape = [-1, 4]); GOOD[2:4]], :signal_and_derivatives) => "x has shape (-1, 4)",
-        ([x_info(shape = [10, 3]); GOOD[2:4]], :signal_and_derivatives) => "x has shape (10, 3)",
-        ([GOOD[1]; out_info("signal"; shape = [-1, 599, 2]); GOOD[3:4]], :signal_and_derivatives) =>
-            "signal has shape (-1, 599, 2)",
-        ([GOOD[1:2]; out_info("dT1"; shape = [-1, 600]); GOOD[4]], :signal_and_derivatives) => "dT1 has shape (-1, 600)",
-        ([GOOD[1:3]; out_info("dT2"; eltype = nothing)], :signal_and_derivatives) => "dT2 is not Float32",
-        (GOOD, :signal) => "unexpected tensor dT1",                    # the full engine, as the signal's
-        (SIGNAL, :signal_and_derivatives) => "no output dT1",
-        ([x_info(); out_info("signal"; shape = [-1, 600])], :signal) => "signal has shape (-1, 600)",
-        (SIGNAL, :coefficients) => "no output coefficients",
-        ([x_info(); out_info("coefficients"; shape = [-1, 15])], :coefficients) => "coefficients has shape (-1, 15)",
-        ([x_info(); out_info("coefficients"; shape = [-1, 16, 2])], :coefficients) =>
-            "coefficients has shape (-1, 16, 2)",
-        ([x_info(); out_info("coefficients"; shape = [-1, 16], eltype = Float16)], :coefficients) =>
-            "coefficients is Float16",
-        ([COEFFICIENTS; out_info("signal")], :coefficients) => "unexpected tensor signal",
-    ]
+    broken = (  # per target: engine description => words the BundleError must contain
+        signal_and_derivatives = [
+            GOOD[1:3] => "no output dT2",
+            [GOOD; out_info("extra")] => "unexpected tensor extra",
+            [x_info(input = false); GOOD[2:4]] => "no input x",
+            [x_info(eltype = Float16); GOOD[2:4]] => "x is Float16",
+            [x_info(shape = [-1, 4]); GOOD[2:4]] => "x has shape (-1, 4)",
+            [x_info(shape = [10, 3]); GOOD[2:4]] => "x has shape (10, 3)",
+            [GOOD[1]; out_info("signal"; shape = [-1, 599, 2]); GOOD[3:4]] => "signal has shape (-1, 599, 2)",
+            [GOOD[1:2]; out_info("dT1"; shape = [-1, 600]); GOOD[4]] => "dT1 has shape (-1, 600)",
+            [GOOD[1:3]; out_info("dT2"; eltype = nothing)] => "dT2 is not Float32",
+            SIGNAL => "no output dT1",
+        ],
+        signal = [
+            GOOD => "unexpected tensor dT1",                                # the full engine, as the signal's
+            [x_info(); out_info("signal"; shape = [-1, 600])] => "signal has shape (-1, 600)",
+        ],
+        coefficients = [
+            SIGNAL => "no output coefficients",
+            [x_info(); out_info("coefficients"; shape = [-1, 15])] => "coefficients has shape (-1, 15)",
+            [x_info(); out_info("coefficients"; shape = [-1, 16, 2])] => "coefficients has shape (-1, 16, 2)",
+            [x_info(); out_info("coefficients"; shape = [-1, 16], eltype = Float16)] => "coefficients is Float16",
+            [COEFFICIENTS; out_info("signal")] => "unexpected tensor signal",
+        ],
+    )
     expected = (signal_and_derivatives = "outputs signal, dT1 and dT2, Float32 (batch, 600, 2)",
                 signal = "output signal, Float32 (batch, 600, 2)",
                 coefficients = "output coefficients, Float32 (batch, 16)")
-    for ((tensors, target), words) in broken
+    for (target, cases) in pairs(broken), (tensors, words) in cases
         err = @test_throws BundleError resolve(tensors, target)
         msg = sprint(showerror, err.value)
         @test occursin(words, msg)
@@ -143,7 +146,7 @@ tier(:T0, "io: inputs and outputs as a whole") do
     @test occursin("p has no property B₁", sprint(showerror, err.value))
 
     cpu = zeros(ComplexF32, 600, 3)
-    check(out) = checkoutputs(out, 3; ntr = 600, rank = 16)
+    check(out) = checkoutputs(out, 3, outputlayout(targetof(out), 600, 16)...)
     err = @test_throws ArgumentError check((; signal = cpu))
     @test occursin("out.signal is a Matrix{ComplexF32} in CPU memory", sprint(showerror, err.value))
     err = @test_throws ArgumentError check((; coefficients = zeros(Float32, 16, 3)))
@@ -157,11 +160,15 @@ tier(:T0, "io: inputs and outputs as a whole") do
     @test occursin("out must be a NamedTuple", sprint(showerror, err.value))
 end
 
-tier(:T0, "io: each output set's layout") do
+tier(:T0, "io: each output set's target and layout") do
     A = zeros(Float32, 1, 1)
-    @test outputlayout((; signal = A), 600, 16) == (600, ComplexF32)
-    @test outputlayout((signal = A, ∂T₁ = A, ∂T₂ = A), 600, 16) == (600, ComplexF32)
-    @test outputlayout((∂T₂ = A, signal = A, ∂T₁ = A), 600, 16) == (600, ComplexF32)   # any order
-    @test outputlayout((; coefficients = A), 600, 16) == (16, Float32)
-    @test_throws ArgumentError outputlayout((; signal = A, ∂T₁ = A), 600, 16)
+    @test targetof((; signal = A)) === :signal
+    @test targetof((signal = A, ∂T₁ = A, ∂T₂ = A)) === :signal_and_derivatives
+    @test targetof((∂T₂ = A, signal = A, ∂T₁ = A)) === :signal_and_derivatives   # any order
+    @test targetof((; coefficients = A)) === :coefficients
+    @test_throws ArgumentError targetof((; signal = A, ∂T₁ = A))
+    @test outputlayout(:signal_and_derivatives, 600, 16) == outputlayout(:signal, 600, 16) == (600, ComplexF32)
+    @test outputlayout(:coefficients, 600, 16) == (16, Float32)
+    err = @test_throws ArgumentError outputlayout(:derivatives, 600, 16)
+    @test occursin("target must be :signal_and_derivatives, :signal or :coefficients", sprint(showerror, err.value))
 end

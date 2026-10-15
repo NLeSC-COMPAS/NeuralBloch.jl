@@ -44,7 +44,7 @@ TensorRT.run!(theirs)
 synchronize()
 
 ref = epg(model, v)
-println("$N voxels (MRSTAT.jl's evaluation set); MRSTAT's engine: $MRSTAT_ENGINE")
+println("$N voxels over the card's training domain; MRSTAT's engine: $MRSTAT_ENGINE")
 println("   ", rpad("output", 8), rpad("ours = MRSTAT's", 17), rpad("max |ours - MRSTAT's|", 23), "NMAE ours / MRSTAT's vs EPG")
 for k in (:signal, :∂T₁, :∂T₂)
     a, b = Array(pred[k]), Array(outs[k])

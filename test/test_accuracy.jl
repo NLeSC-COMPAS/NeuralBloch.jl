@@ -6,7 +6,7 @@
 # pairing) misses by ≈ 100 %. scripts/validate.jl reports the same on a
 # larger set.
 
-using NeuralBloch: Engine, Model, predict, sequence
+using NeuralBloch: Engine, Model, predict, domain, sequence
 using CUDACore: CuArray
 using Random: Xoshiro
 using StructArrays: StructArray
@@ -27,7 +27,7 @@ const ACCURACY_BOUNDS = (signal = 0.0237, ∂T₁ = 0.0140, ∂T₂ = 0.0229)
 # it: T₁, T₂ log-uniform, B₁ uniform, T₂ < T₁ (here capped at 0.8 T₁).
 function accuracy_set(model, n = 2000; seed = 2026)
     rng = Xoshiro(seed)
-    (T₁lo, T₁hi), (T₂lo, T₂hi), (B₁lo, B₁hi) = model.domain.T1, model.domain.T2, model.domain.B1
+    (T₁lo, T₁hi), (T₂lo, T₂hi), (B₁lo, B₁hi) = domain(model)
     T₁ = exp.(rand(rng, n) .* (log(T₁hi) - log(T₁lo)) .+ log(T₁lo))
     T₂ = min.(exp.(rand(rng, n) .* (log(T₂hi) - log(T₂lo)) .+ log(T₂lo)), 0.8 .* T₁)
     B₁ = B₁lo .+ (B₁hi - B₁lo) .* rand(rng, n)
@@ -43,7 +43,7 @@ function epg_reference(model, v)
     d = model.derivatives
     if d.method == "forward sensitivity"
         echos, ∂ = simulate_derivatives_forward_sensitivity((:T₁, :T₂), seq, parameters)
-    else                                                                # forward difference
+    else                                                                # forward difference, Model's only other method
         echos = simulate_magnetization(CUDALibs(), seq, parameters)
         steps = BlochSimulators.T₁T₂B₁B₀(d.dT1_step, d.dT2_step, BlochSimulators.DEFAULT_ΔB₁,
                                          BlochSimulators.DEFAULT_ΔB₀)

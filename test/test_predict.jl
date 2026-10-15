@@ -292,7 +292,7 @@ tier(:T2, "predict: two tasks share one engine") do
     # tasks share one engine's buffers; different targets, the engine object.
     for (targetA, targetB) in ((:signal_and_derivatives, :signal_and_derivatives), (:signal_and_derivatives, :signal),
                                (:coefficients, :signal))
-        refA, refB = map(Array, predict(e, pA; target = targetA)), map(Array, predict(e, pB; target = targetB))
+        refA, refB = predict(e, pA; target = targetA), predict(e, pB; target = targetB)
         synchronize()
         results = Dict{Symbol,Bool}()
         @sync for (name, p, target, ref) in ((:A, pA, targetA, refA), (:B, pB, targetB, refB))
@@ -303,7 +303,7 @@ tier(:T2, "predict: two tasks share one engine") do
                     predict!(out, e, p)
                     yield()                                    # let the other task queue its run
                     synchronize()
-                    ok &= map(Array, out) == ref
+                    ok &= all(map(==, out, ref))               # bitwise, compared on the GPU
                 end
                 results[name] = ok
             end
@@ -354,7 +354,7 @@ tier(:T2, "predict: close races predict! and close") do
     seen = Set{String}()
     for round in 1:10
         e = Engine(; batch = (1, 64, 1000))
-        out = outputs(e, N; target = (:signal_and_derivatives, :signal, :coefficients)[mod1(round, 3)])
+        out = outputs(e, N; target = NeuralBloch.TARGETS[mod1(round, 3)])
         running = Threads.@spawn try
             while true
                 predict!(out, e, p)

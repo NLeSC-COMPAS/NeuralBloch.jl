@@ -30,54 +30,48 @@ function install(src, dest)
     parent = dirname(dest)
     new = mktempdir(parent; prefix = ".$(basename(dest))-new-", cleanup = false)
     old = joinpath(parent, ".$(basename(dest))-old")
-    moved = false
+    rm(old; recursive = true, force = true)
     try
         for name in bundlefiles(src)
             mkpath(dirname(joinpath(new, name)))
             cp(joinpath(src, name), joinpath(new, name))
         end
         chmod(new, 0o755)
-        if ispath(dest)
-            rm(old; recursive = true, force = true)
-            mv(dest, old)
-            moved = true
-        end
+        ispath(dest) && mv(dest, old)
         mv(new, dest)
     catch
         rm(new; recursive = true, force = true)
-        moved && !ispath(dest) && mv(old, dest)
+        ispath(old) && !ispath(dest) && mv(old, dest)
         rethrow()
     end
-    moved && rm(old; recursive = true)
+    rm(old; recursive = true, force = true)
     return dest
 end
 
-function main(args)
+# The bundle in `dir`, or the BundleError that refuses it.
+loaded(dir) = try Model(dir) catch err; err isa BundleError ? err : rethrow() end
+
+# The exit code; the test suite calls it with buffers for stdout and stderr.
+function main(args; stdout::IO = Base.stdout, stderr::IO = Base.stderr)
     if !(1 ≤ length(args) ≤ 2)
         println(stderr, "usage: julia --project dev/update_bundle.jl SRC [DEST]")
         return 2
     end
     src = abspath(args[1])
     dest = abspath(length(args) == 2 ? args[2] : joinpath(pkgdir(NeuralBloch), "models"))
-    new = try
-        Model(src)
-    catch err
-        err isa BundleError || rethrow()
-        println(stderr, "Refusing $src: ", sprint(showerror, err))
+    new = loaded(src)
+    if new isa BundleError
+        println(stderr, "Refusing $src: ", sprint(showerror, new))
         return 1
     end
-    current = try
-        Model(dest)
-    catch err
-        err isa BundleError || rethrow()
-        println("$dest holds no bundle this NeuralBloch reads (", sprint(showerror, err), "); replacing it.")
-        nothing
-    end
-    if current !== nothing
-        if read(joinpath(src, "card.toml")) == read(joinpath(dest, "card.toml")) && current.sequence == new.sequence
-            println("$dest already holds $(new.family) v$(new.version).")
-            return 0
-        end
+    current = loaded(dest)
+    if current isa BundleError
+        println(stdout, "$dest holds no bundle this NeuralBloch reads (", sprint(showerror, current),
+                "); replacing it.")
+    elseif read(joinpath(src, "card.toml")) == read(joinpath(dest, "card.toml")) && current.sequence == new.sequence
+        println(stdout, "$dest already holds $(new.family) v$(new.version).")
+        return 0
+    else
         problems = contract_problems(current, new)
         if !isempty(problems)
             println(stderr, "Refusing to replace $(current.family) v$(current.version) in $dest with v$(new.version), ",
@@ -86,12 +80,14 @@ function main(args)
             return 1
         end
         current.family == new.family ||
-            println("Replacing family $(current.family) with $(new.family): a different contract for callers.")
+            println(stdout, "Replacing family $(current.family) with $(new.family): a different contract for callers.")
     end
     install(src, dest)
     installed = Model(dest)
-    println("Installed $(installed.family) v$(installed.version) into $dest.")
+    println(stdout, "Installed $(installed.family) v$(installed.version) into $dest.")
     return 0
 end
 
-exit(main(ARGS))
+if abspath(PROGRAM_FILE) == @__FILE__
+    exit(main(ARGS))
+end

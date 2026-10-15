@@ -98,7 +98,7 @@ function main()
         println(passed ? "PASS  " : "FAIL  ", name)
     end
     println("first use in the fresh depot: ", round(t / 60; digits = 1), " minutes, downloads included")
-    good = ok && length(checks) == 8 && all(last, checks)
+    good = ok && length(checks) == 5 + length(TARGETS) && all(last, checks)
     println(good ? "Distribution test passed." : "Distribution test FAILED.")
     rm(root; recursive = true, force = true)
     return good

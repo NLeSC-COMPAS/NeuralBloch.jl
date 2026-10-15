@@ -97,7 +97,7 @@ Goal: open the engines once, then run the one each call asks for.
 | File | Role |
 |---|---|
 | `src/io.jl` | `checkinputs`, `checkoutputs`, `batch_problem`, plus alignment and overlap checks, all before anything is queued. Also the ASCII/Unicode name mapping (`dT1` and `∂T₁`). |
-| `src/predict.jl` | `predict!`, `predict` and `outputs`. The keys of `out` choose the target (`targetof`); `stage!` copies `T₁`, `T₂`, `B₁` into that target's input buffer; `bind!` binds its outputs. `checkdomain` and `close` are also here. |
+| `src/predict.jl` | `predict!`, `predict` and `outputs`. The keys of `out` choose the target (`targetof` in `io.jl`); `stage!` copies `T₁`, `T₂`, `B₁` into that target's input buffer; `bind!` binds its outputs. `checkdomain` and `close` are also here. |
 | `src/model.jl` | Holds `ntr`, `rank`, the training domain and the sequence metadata; `ntr`, `rank`, `domain` and `sequence` in `predict.jl` read them. |
 | `src/tensorrt/engine.jl` | `claim!` orders streams, `set_shape!` checks the profile, `set_address!` binds device pointers, `run!` enqueues the run. `close` and the finalizer free the handle. |
 | `csrc/engine.cpp` | `nb_set_shape`, `nb_set_address`, `nb_enqueue` (`enqueueV3` on the CUDA stream), `nb_close`. |

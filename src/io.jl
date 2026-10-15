@@ -88,13 +88,12 @@ tensor, a dtype other than Float32, a different shape) is a
 [`BundleError`](@ref): the ONNX is not the one the model card describes.
 """
 function resolve_io(tensors::AbstractVector{TensorRT.TensorInfo}, target::Symbol; ntr::Integer, rank::Integer)
-    target in TARGETS || throw(ArgumentError("unknown target $(repr(target)); the targets are " *
-                                             join(repr.(TARGETS), ", ")))
+    rows, E = outputlayout(target, ntr, rank)
     outputs = OUTPUTS[target]
-    shape(name) = name == "coefficients" ? [-1, rank] : [-1, ntr, 2]
+    outshape = E <: Complex ? [-1, rows, 2] : [-1, rows]     # TensorRT has no complex type: (Re, Im) last
     listing = length(outputs) == 1 ? "output $(only(outputs))" : "outputs " * join(outputs, ", ", " and ")
     expected = "one input x, Float32 (batch, 3) = [T₁, T₂, B₁] per voxel, and $listing, Float32 " *
-               "(batch, $(join(shape(first(outputs))[2:end], ", ")))"
+               "(batch, $(join(outshape[2:end], ", ")))"
     bad(what) = throw(BundleError("the $target engine does not match the model card: $what; expected $expected"))
     index(name, input) = findfirst(t -> t.name == name && t.input == input, tensors)
     function check(i, name, shape)
@@ -113,7 +112,7 @@ function resolve_io(tensors::AbstractVector{TensorRT.TensorInfo}, target::Symbol
     for t in tensors
         (t.name == INPUT || t.name in outputs) || bad("unexpected tensor $(t.name)")
     end
-    indices = map((name, o) -> check(o, name, shape(name)), outputs, outs)
+    indices = map((name, o) -> check(o, name, outshape), outputs, outs)
     return NamedTuple{(:x, map(publicname, outputs)...)}((check(x, INPUT, [-1, 3]), indices...))
 end
 
@@ -233,41 +232,46 @@ function overlap_problem(names::Tuple, addresses::Tuple, nbytes::Integer)
     return nothing
 end
 
-# The output sets: the signal and its derivatives (in any order), the signal
-# alone, or the coefficients. Each is one target, computed by its own engine.
-outputkeys_ok(keys::Tuple) = keys === (:signal,) || keys === (:coefficients,) ||
-                             (length(keys) == 3 && :signal in keys && :∂T₁ in keys && :∂T₂ in keys)
-
 const OUTPUT_SETS = "(; signal, ∂T₁, ∂T₂) in any order, (; signal) or (; coefficients)"
 
 """
-    outputlayout(out, ntr, rank) -> (rows, E)
+    targetof(out) -> Symbol
 
-The rows and element type every output in `out` must have: `(rank, Float32)`
-for `(; coefficients)`, `(ntr, ComplexF32)` for the signal and its
-derivatives. An `ArgumentError` unless `out` is one of the output sets.
+The target whose engine computes the output set `out`: the signal and its
+derivatives (in any order), the signal alone, or the coefficients. An
+`ArgumentError` unless `out` is one of these sets. Decided by the type of
+`out`, so `predict!` knows its target, engine and layout statically.
 """
-function outputlayout(out::NamedTuple, ntr::Integer, rank::Integer)
-    outputkeys_ok(keys(out)) || throw(ArgumentError("out must be $OUTPUT_SETS, not a NamedTuple with keys $(keys(out))"))
-    return out isa NamedTuple{(:coefficients,)} ? (Int(rank), Float32) : (Int(ntr), ComplexF32)
+targetof(::NamedTuple{(:signal,)}) = :signal
+targetof(::NamedTuple{(:coefficients,)}) = :coefficients
+function targetof(out::NamedTuple)
+    names = keys(out)
+    length(names) == 3 && :signal in names && :∂T₁ in names && :∂T₂ in names && return :signal_and_derivatives
+    throw(ArgumentError("out must be $OUTPUT_SETS, not a NamedTuple with keys $names"))
 end
+targetof(out) = throw(ArgumentError("out must be a NamedTuple, $OUTPUT_SETS, not a $(typeof(out))"))
 
-outputlayout(out, ntr, rank) = throw(ArgumentError("out must be a NamedTuple, $OUTPUT_SETS, not a $(typeof(out))"))
+"""
+    outputlayout(target, ntr, rank) -> (rows, E)
+
+The rows and element type of each of `target`'s outputs: `(ntr, ComplexF32)`
+for the signal and its derivatives, `(rank, Float32)` for the coefficients.
+"""
+function outputlayout(target::Symbol, ntr::Integer, rank::Integer)
+    checktarget(target)
+    return target === :coefficients ? (Int(rank), Float32) : (Int(ntr), ComplexF32)
+end
 
 address(A::CuArray) = UInt(pointer(A))
 
 """
-    checkoutputs(out, N; ntr, rank)
+    checkoutputs(out, N, rows, E)
 
-Check `out` against the contract for a batch of `N` voxels: one of the output
-sets ([`outputlayout`](@ref)) of dense `CuMatrix`es, each `(ntr, N)`
-`ComplexF32` for the signal and its derivatives or `(rank, N)` `Float32` for
-the coefficients, 256-byte aligned, not overlapping. Otherwise an
+Check `out`, an output set ([`targetof`](@ref)), against the contract for a
+batch of `N` voxels: dense `CuMatrix{E}`s of size `(rows, N)` (its target's
+[`outputlayout`](@ref)), 256-byte aligned, not overlapping. Otherwise an
 `ArgumentError` saying what to change.
 """
-checkoutputs(out, N::Integer; ntr::Integer, rank::Integer) = checkoutputs(out, N, outputlayout(out, ntr, rank)...)
-
-# The checks once `out` is known to be an output set of `rows` × N outputs of `E`.
 function checkoutputs(out::NamedTuple, N::Integer, rows::Integer, ::Type{E}) where {E}
     map(keys(out), values(out)) do name, A
         problem = output_problem(typeof(A), E)

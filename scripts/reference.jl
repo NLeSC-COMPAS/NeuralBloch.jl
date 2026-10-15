@@ -4,7 +4,7 @@
 # card's steps), on the training sequence and domain as the card describes
 # them. Included by scripts/validate.jl and dev/compare_mrstat.jl.
 
-using NeuralBloch: Model, sequence
+using NeuralBloch: Model, domain, sequence
 using BlochSimulators: BlochSimulators, FISP3D, @parameters, gpu, f32, simulate_magnetization,
                        simulate_derivatives_finite_difference, simulate_derivatives_forward_sensitivity
 using ComputationalResources: CUDALibs
@@ -18,7 +18,7 @@ using Random: Random
 # evaluation set (scripts/validate_tensorrt.jl).
 function evaluation_set(model::Model, n = 14400; seed = 20260826)
     Random.seed!(seed)
-    (T₁lo, T₁hi), (T₂lo, T₂hi), (B₁lo, B₁hi) = model.domain.T1, model.domain.T2, model.domain.B1
+    (T₁lo, T₁hi), (T₂lo, T₂hi), (B₁lo, B₁hi) = domain(model)
     T₁ = exp.(rand(n) .* (log(T₁hi) - log(T₁lo)) .+ log(T₁lo))
     T₂ = min.(exp.(rand(n) .* (log(T₂hi) - log(T₂lo)) .+ log(T₂lo)), 0.8 .* T₁)
     B₁ = B₁lo .+ (B₁hi - B₁lo) .* rand(n)
@@ -41,13 +41,11 @@ function epg(model::Model, v)
     d = model.derivatives
     if d.method == "forward sensitivity"
         echos, ∂ = simulate_derivatives_forward_sensitivity((:T₁, :T₂), seq, parameters)
-    elseif d.method == "forward difference"
+    else                                                        # forward difference, Model's only other method
         echos = simulate_magnetization(CUDALibs(), seq, parameters)
         steps = BlochSimulators.T₁T₂B₁B₀(d.dT1_step, d.dT2_step, BlochSimulators.DEFAULT_ΔB₁,
                                          BlochSimulators.DEFAULT_ΔB₀)
         ∂ = simulate_derivatives_finite_difference((:T₁, :T₂), echos, seq, parameters, steps)
-    else
-        error("the reference implements forward sensitivity and forward differences; the card says $(d.method)")
     end
     return (signal = echos, ∂T₁ = ∂.T₁, ∂T₂ = ∂.T₂)
 end

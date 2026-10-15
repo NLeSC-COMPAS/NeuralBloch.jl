@@ -65,22 +65,18 @@ function Engine(model::Model = Model(); batch = (1, 14400, 40000), tf32::Bool = 
     # prerequisite first, the GPU included, and compiles what it needs.)
     paths = map(target -> TensorRT.build(model.onnx[target]; settings, sys), TARGETS)
     native = TensorRT.compile(sys)
-    opened = TensorRT.Handle[]
+    handles = TensorRT.Handle[]
     try
-        handles = map(paths) do path
-            h = TensorRT.Handle(path; native)
-            push!(opened, h)
-            h
+        for path in paths
+            push!(handles, TensorRT.Handle(path; native))
         end
         ios = map((target, h) -> resolve_io(TensorRT.tensors(h), target; model.ntr, model.rank), TARGETS, handles)
-        profiles = map((h, io) -> Tuple(shape[1] for shape in TensorRT.tensors(h)[io.x+1].profile), handles, ios)
-        allequal(profiles) || throw(BundleError(
-            "the engines of $(model.dir) accept different batch sizes: $(NamedTuple{TARGETS}(profiles))"))
-        lo, opt, hi = first(profiles)
+        # One `settings` built them all (and is part of their cache key): one profile.
+        lo, opt, hi = (shape[1] for shape in TensorRT.tensors(first(handles))[first(ios).x+1].profile)
         targets = NamedTuple{TARGETS}(map((h, io) -> Target(h, io, CuMatrix{Float32}(undef, 3, hi)), handles, ios))
         return Engine(model, targets, (min = lo, opt, max = hi), sys.gpu.name, ReentrantLock())
     catch
-        foreach(close, opened)
+        foreach(close, handles)
         rethrow()
     end
 end
@@ -160,10 +156,6 @@ sequence(e::Engine) = sequence(e.model)
 
 # --- predicting ---------------------------------------------------------------------
 
-# A target's name, or an ArgumentError.
-checktarget(target::Symbol) = target in TARGETS || throw(ArgumentError(
-    "target must be :signal_and_derivatives, :signal or :coefficients, not $(repr(target))"))
-
 """
     outputs(engine, N; target = :signal_and_derivatives)
 
@@ -216,11 +208,12 @@ violation is an `ArgumentError`, thrown before anything is queued. After
 warm-up it allocates nothing, on the host or the GPU.
 """
 function predict!(out, engine::Engine, p)
-    rows, E = outputlayout(out, engine.model.ntr, engine.model.rank)
+    target = targetof(out)
+    rows, E = outputlayout(target, engine.model.ntr, engine.model.rank)
     N = checkcall(engine, p, alignment(rows, E))
     checkoutputs(out, N, rows, E)
     N == 0 && return out
-    t = targetof(engine, out)
+    t = engine.targets[target]
     h, io = t.handle, t.io
     @lock engine.lock begin
         stream = CUDACore.stream()
@@ -241,10 +234,9 @@ end
 `:signal_and_derivatives`, `:signal` or `:coefficients`.
 """
 function predict(engine::Engine, p; target::Symbol = :signal_and_derivatives)
-    checktarget(target)
     m = engine.model
-    step = target === :coefficients ? alignment(m.rank, Float32) : alignment(m.ntr, ComplexF32)
-    return predict!(outputs(engine, checkcall(engine, p, step); target), engine, p)
+    N = checkcall(engine, p, alignment(outputlayout(target, m.ntr, m.rank)...))
+    return predict!(outputs(engine, N; target), engine, p)
 end
 
 # The batch size of a call on `engine` with inputs `p`, once both are known to
@@ -257,11 +249,6 @@ function checkcall(engine::Engine, p, step::Integer)
     problem === nothing || throw(ArgumentError(problem))
     return N
 end
-
-# The engine that computes an output set (outputkeys_ok has checked it).
-targetof(e::Engine, ::NamedTuple{(:signal,)}) = e.targets.signal
-targetof(e::Engine, ::NamedTuple{(:coefficients,)}) = e.targets.coefficients
-targetof(e::Engine, ::NamedTuple) = e.targets.signal_and_derivatives    # (; signal, ∂T₁, ∂T₂), any order
 
 # Bind every output to the engine's tensor of the same name. One method per
 # output set, with the names spelled out: mapping over the names instead

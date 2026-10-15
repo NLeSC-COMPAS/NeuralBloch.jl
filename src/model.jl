@@ -28,6 +28,10 @@ const FORMAT = 2
 #   coefficients            coefficients       (FCModel.forward_coefficients)
 const TARGETS = (:signal_and_derivatives, :signal, :coefficients)
 
+# A target's name, or an ArgumentError.
+checktarget(target::Symbol) = target in TARGETS || throw(ArgumentError(
+    "target must be $(join(repr.(TARGETS), ", ", " or ")), not $(repr(target))"))
+
 # The domain constraints checkdomain implements.
 const CONSTRAINTS = ("T2 < T1",)
 
@@ -140,10 +144,8 @@ function Model(dir::AbstractString = joinpath(pkgdir(@__MODULE__), "models"))
         throw(BundleError("$path is not valid TOML: " * sprint(showerror, err)))
     end
     need(T, table, key) = field(card, path, table, key, T)
-    positive(table, key) = (v = need(Int, table, key);
-                            v ≥ 1 || throw(BundleError("$path: [$table] $key must be positive, not $v")); v)
-    positivestep(key) = (v = need(Float64, "derivatives", key);
-                         v > 0 || throw(BundleError("$path: [derivatives] $key must be positive, not $v")); v)
+    positive(T, table, key) = (v = need(T, table, key);
+                               v > 0 || throw(BundleError("$path: [$table] $key must be positive, not $v")); v)
 
     format = get(card, "format", nothing)
     format === nothing && throw(BundleError(
@@ -153,9 +155,9 @@ function Model(dir::AbstractString = joinpath(pkgdir(@__MODULE__), "models"))
         "$path has card format $(repr(format)); this NeuralBloch reads format $FORMAT"))
 
     family = need(String, "model", "family")
-    version = positive("model", "version")
-    ntr = positive("model", "ntr")
-    rank = positive("model", "rank")
+    version = positive(Int, "model", "version")
+    ntr = positive(Int, "model", "ntr")
+    rank = positive(Int, "model", "rank")
     stated = familyrank(family)
     stated === nothing && throw(BundleError(
         "$path: [model] family $(repr(family)) must be lowercase words joined by hyphens, exactly one " *
@@ -186,16 +188,14 @@ function Model(dir::AbstractString = joinpath(pkgdir(@__MODULE__), "models"))
     method = need(String, "derivatives", "method")
     method in DERIVATIVE_METHODS || throw(BundleError(
         "$path: [derivatives] method $(repr(method)) is not one of " * join(repr.(DERIVATIVE_METHODS), ", ")))
-    steps = if method == "forward difference"
-        (positivestep("dT1_step"), positivestep("dT2_step"))
-    else
-        for key in ("dT1_step", "dT2_step")
-            haskey(card["derivatives"], key) && throw(BundleError(
-                "$path: [derivatives] $key is given, but steps apply only to forward differences, not $method"))
-        end
-        (nothing, nothing)
+    # A step, given exactly when the method is forward differences.
+    function fdstep(key)
+        method == "forward difference" && return positive(Float64, "derivatives", key)
+        haskey(card["derivatives"], key) && throw(BundleError(
+            "$path: [derivatives] $key is given, but steps apply only to forward differences, not $method"))
+        return nothing
     end
-    derivatives = (; method, dT1_step = steps[1], dT2_step = steps[2])
+    derivatives = (; method, dT1_step = fdstep("dT1_step"), dT2_step = fdstep("dT2_step"))
 
     rf(key) = rftable(bundlefile(dir, path, "sequence", key, need(String, "sequence", key)), ntr)
     sequence = (kind = need(String, "sequence", "kind"),
