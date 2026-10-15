@@ -1,6 +1,9 @@
 # model.jl: the bundle (ONNX per target, card, RF tables) and its checks. Julia only.
 
 using NeuralBloch: Model, BundleError, TARGETS, contract_problems
+using SHA: sha256
+using Tar: Tar
+using TOML: TOML
 
 const BUNDLE = joinpath(pkgdir(NeuralBloch), "models")
 
@@ -203,5 +206,96 @@ tier(:T0, "model: update_bundle.jl installs within the family's contract") do
         ok, _, err = update(broken, dest)
         @test !ok && occursin("Refusing", err) && occursin("format 3", err)
         @test read(joinpath(dest, "card.toml")) == before
+    end
+end
+
+# dev/bind_bundle.jl's functions, for its main in this process.
+module BindBundle
+include(joinpath(@__DIR__, "..", "dev", "bind_bundle.jl"))
+end
+
+# The gzip-compressed tarball of `dir` at `path`, its files at the root, as
+# NeuralBloch's export_bundle writes a release file.
+function release_file(dir, path)
+    open(pipeline(`gzip -9n`; stdout = path), "w") do io
+        Tar.create(dir, io)
+    end
+    return path
+end
+
+tier(:T0, "model: bind_bundle.jl binds a release file within the family's contract") do
+    mktempdir() do dir
+        depot = mkpath(joinpath(dir, "depot"))           # artifacts land here, not in ~/.julia
+        toml = joinpath(dir, "Artifacts.toml")
+        entry() = TOML.parsefile(toml)["neuralbloch_fisp600_rank16"]
+        url(version) = "https://github.com/NLeSC-COMPAS/NeuralBloch/releases/download/" *
+                       "model-fisp600-rank16-v$version/neuralbloch-model-fisp600-rank16-v$version.tar.gz"
+        # Version `version` of the bundle as a release file named `name`, with
+        # `edit` applied to its card and `files` to its directory
+        function release(edit, version; files = identity, name = basename(url(version)))
+            b = edited_bundle(s -> edit(replace(s, "version = 1" => "version = $version")),
+                              mkpath(joinpath(dir, "v$version")))
+            files(b)
+            return release_file(b, joinpath(dir, name))
+        end
+        function bind(file)
+            out, err = IOBuffer(), IOBuffer()
+            pushfirst!(DEPOT_PATH, depot)
+            code = try
+                BindBundle.main([file, toml]; stdout = out, stderr = err)
+            finally
+                popfirst!(DEPOT_PATH)
+            end
+            return code == 0, String(take!(out)), String(take!(err))
+        end
+
+        v1 = release(identity, 1)
+        ok, out, _ = bind(v1)
+        @test ok && occursin("Bound fisp600-rank16 v1 as neuralbloch_fisp600_rank16", out)
+        @test entry()["git-tree-sha1"] == Tar.tree_hash(`gzip -dc $v1`)
+        @test entry()["download"] == [Dict("sha256" => bytes2hex(open(sha256, v1)), "url" => url(1))]
+        @test !haskey(entry(), "lazy")                                       # downloaded with the package
+        ok, out, _ = bind(v1)
+        @test ok && occursin("already binds fisp600-rank16 v1", out)
+
+        v2 = release(s -> replace(s, "T1 = [0.1, 6.0]" => "T1 = [0.1, 7.0]"), 2)
+        ok, _, _ = bind(v2)
+        @test ok && entry()["download"][1]["url"] == url(2)
+        before = read(toml)
+        truncated = joinpath(dir, "truncated.tar.gz")
+        write(truncated, read(v2)[1:1000])
+        cases = [  # a release file to refuse => words the refusal must contain
+            release(s -> replace(s, "B1 = [0.5, 1.5]" => "B1 = [0.6, 1.5]"), 3) =>
+                "domain B1 [0.5, 1.5] → [0.6, 1.5]",
+            release(identity, 4; files = b -> write(joinpath(b, "stray.txt"), "not named by the card")) =>
+                "files its card does not name: stray.txt",
+            release(identity, 5; name = basename(url(6))) => "must be named $(basename(url(5)))",
+            release(s -> replace(s, "format = 2" => "format = 9"), 7) => "has card format 9",
+            truncated => "not a gzip-compressed tarball",
+        ]
+        for (file, words) in cases
+            ok, _, err = bind(file)
+            @test !ok && occursin(words, err)
+            @test read(toml) == before                                      # unchanged
+        end
+
+        # What is bound is what Pkg downloads: v2's entry, its URL swapped for
+        # the local file, installs into an empty depot, with neither the
+        # package server nor the network
+        offline = joinpath(dir, "Offline.toml")
+        write(offline, replace(read(toml, String), url(2) => "file://$v2"))
+        fresh = mkpath(joinpath(dir, "fresh"))
+        code = "using Pkg.Artifacts; print(ensure_artifact_installed(\"neuralbloch_fisp600_rank16\", $(repr(offline))))"
+        env = merge(ENV, Dict("JULIA_DEPOT_PATH" => fresh * ":", "JULIA_PKG_SERVER" => ""))
+        delete!(env, "JULIA_LOAD_PATH")
+        @test startswith(readchomp(setenv(`$(Base.julia_cmd()) --startup-file=no -e $code`, env)), fresh)
+
+        # Once as the command the README gives (read throws unless it exits with 0)
+        script = joinpath(pkgdir(NeuralBloch), "dev", "bind_bundle.jl")
+        v8 = release(s -> replace(s, "T1 = [0.1, 6.0]" => "T1 = [0.1, 8.0]"), 8)
+        env = merge(ENV, Dict("JULIA_DEPOT_PATH" => join([depot; DEPOT_PATH], ':')))
+        cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project()) $script $v8 $toml`
+        @test occursin("Bound fisp600-rank16 v8", read(setenv(cmd, env), String))
+        @test entry()["download"][1]["url"] == url(8)
     end
 end
