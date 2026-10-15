@@ -8,7 +8,11 @@
 #
 # Reads ../MRSTAT.jl/models/model.engine and writes nothing. MRSTAT's engine
 # runs through this package's own TensorRT layer: libnb-trtinfer.so opens any
-# engine of the installed TensorRT version.
+# engine of the installed TensorRT version. The comparison means something
+# only when both engines come from the same model: since the fisp600-rank16
+# v1 bundle, rebuild upstream's engine and re-run MRSTAT's bootstrap.sh first.
+# The evaluation set now follows the card's domain, so it is MRSTAT's set
+# only on the previous card's domain.
 
 using NeuralBloch
 using NeuralBloch: TensorRT, resolve_io
@@ -27,7 +31,7 @@ ours = Engine(model)
 pred = predict(ours, gpu_voxels(v))
 
 theirs = TensorRT.Handle(MRSTAT_ENGINE)
-io = resolve_io(TensorRT.tensors(theirs), model.ntr)
+io = resolve_io(TensorRT.tensors(theirs), :signal_and_derivatives; model.ntr, model.rank)
 X = CuArray(Float32.(permutedims(hcat(v.T₁, v.T₂, v.B₁))))       # (3, N): the engine's x
 outs = (signal = CuMatrix{ComplexF32}(undef, model.ntr, N), ∂T₁ = CuMatrix{ComplexF32}(undef, model.ntr, N),
         ∂T₂ = CuMatrix{ComplexF32}(undef, model.ntr, N))

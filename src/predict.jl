@@ -41,7 +41,7 @@ function Engine(model::Model = Model(); batch = (1, 14400, 40000), tf32::Bool = 
     handle = TensorRT.Handle(TensorRT.build(model.onnx.signal_and_derivatives; settings, sys);
                              native = TensorRT.compile(sys))
     io = try
-        resolve_io(TensorRT.tensors(handle), model.ntr)
+        resolve_io(TensorRT.tensors(handle), :signal_and_derivatives; model.ntr, model.rank)
     catch
         close(handle)
         rethrow()
@@ -188,7 +188,7 @@ predict(engine::Engine, p; derivatives::Bool = true) =
 function checkcall(engine::Engine, p)
     isopen(engine) || throw(InvalidStateException("the engine is closed", :closed))
     N = checkinputs(p)
-    problem = batch_problem(engine.batch, engine.model.ntr, N)
+    problem = batch_problem(engine.batch, N, alignment(engine.model.ntr, ComplexF32))
     problem === nothing || throw(ArgumentError(problem))
     return N
 end
