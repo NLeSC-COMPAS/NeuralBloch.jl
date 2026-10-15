@@ -7,13 +7,13 @@ with respect to T₁ and T₂, the signal alone, or the signal's coefficients in
 the network's low-rank basis. Each comes from its own TensorRT engine, which
 computes only that.
 
-The package contains the trained network as a model bundle in `models/`:
-an ONNX file for each of these three predictions, the RF tables of the
-training sequence, and a card that describes them, all written by
-NeuralBloch's `export_bundle`. The bundled model is `fisp600-rank16`
-version 1, trained for T₁ from 0.1 to 6 s, T₂ from 0.01 to 2 s with
-T₂ < T₁, and B₁ from 0.5 to 1.5. On your machine, the package does these
-steps automatically:
+The trained network comes as a model bundle: an ONNX file for each of these
+three predictions, the RF tables of the training sequence, and a card that
+describes them, all written by NeuralBloch's `export_bundle` and published as
+a NeuralBloch release. Pkg downloads the bundle when it installs the package.
+The model is `fisp600-rank16` version 0.1.0-beta.1, trained for T₁ from 0.1
+to 6 s, T₂ from 0.01 to 2 s with T₂ < T₁, and B₁ from 0.5 to 1.5. On your
+machine, the package does these steps automatically:
 
 1. **Compile.** g++ compiles the C++ code of the package (`csrc/`) against
    your TensorRT. This occurs one time for each TensorRT version.
@@ -113,6 +113,15 @@ Pkg.add(url = "/path/to/NeuralBloch.jl")
 Pkg.add("CUDACore")
 ```
 
+`Pkg.add` also downloads the model, about 1.1 MB, from the NeuralBloch
+release
+[`model-fisp600-rank16-v0.1.0-beta.1`](https://github.com/NLeSC-COMPAS/NeuralBloch/releases/tag/model-fisp600-rank16-v0.1.0-beta.1),
+and checks it against the hashes in `Artifacts.toml`. After that, the package
+needs no network. If your GPU nodes have no internet access, run `Pkg.add`
+(or `Pkg.instantiate`) on a login node that shares the Julia depot. To use
+another model bundle, such as your own export, pass its directory:
+`Engine(Model("/path/to/bundle"))`.
+
 ## Quick start
 
 This example shows the complete workflow. Run it as one script.
@@ -189,19 +198,32 @@ julia --project -e 'using Pkg; Pkg.test()'
 The tests skip the parts that the machine cannot run, for example the GPU
 tests. Set `NEURALBLOCH_TEST_ALL=1` to make each skip a failure.
 
-Update the bundled model with a bundle from NeuralBloch's
-`uv run run.py export_bundle`:
+A new model comes from NeuralBloch: `uv run run.py export_bundle` writes the
+bundle and its release file, `outputs/neuralbloch-model-<family>-v<version>.tar.gz`.
+Bind that file as this package's artifact for its family:
 
 ```sh
-julia --project dev/update_bundle.jl /path/to/NeuralBloch/outputs/bundle
+julia --project dev/bind_bundle.jl /path/to/NeuralBloch/outputs/neuralbloch-model-fisp600-rank16-v0.1.0-beta.2.tar.gz
 ```
 
-It installs the bundle into `models/`. A later version of the same family
-must keep the family's contract: the same readouts, rank, sequence and RF
-tables, a training domain that is the same or wider, and a higher version.
-Otherwise the script changes nothing and lists the differences. The tests
-and `scripts/validate.jl` pin the bundled model: its card's values, such as
-the version, hashes and domain (`test/test_model.jl`,
-`test/test_predict.jl`), and the accuracy measured on it
-(`test/test_accuracy.jl`, the thresholds in `scripts/validate.jl`). Update
-them for the new bundle, then run both.
+The script installs the file through Pkg from its local path, with the same
+unpacking and hash checks as after a download, and writes the family's entry
+in `Artifacts.toml`: the release URL, the file's sha256 and its tree hash. A
+later version of the same family must keep the family's contract: the same
+readouts, rank, sequence and RF tables, a training domain that is the same or
+wider, and a higher [semantic version](https://semver.org), for example
+0.1.0-beta.1, then 0.1.0-beta.2, then 0.1.0. Otherwise the script changes
+nothing and lists the differences. Within a family, PATCH counts re-exports
+of the same weights, MINOR new weights or a wider domain, and MAJOR stays 0
+until the family is stable. Then:
+
+1. Update what the tests and `scripts/validate.jl` pin: the card's values,
+   such as the version, hashes and domain (`test/test_model.jl`,
+   `test/test_predict.jl`), and the accuracy measured on the model
+   (`test/test_accuracy.jl`, the thresholds in `scripts/validate.jl`). Run
+   both.
+2. Publish the file, unchanged, as NeuralBloch's release
+   `model-<family>-v<version>` (see "Publish a model release" in
+   NeuralBloch's README).
+3. Push. Until the release exists, nobody can install a commit that binds
+   it, the CI included.
