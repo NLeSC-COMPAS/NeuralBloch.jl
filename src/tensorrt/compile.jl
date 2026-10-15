@@ -61,7 +61,10 @@ csrc_hash(dir::AbstractString = csrc_dir()) =
 # that changes only a flag still recompiles.
 const CXXFLAGS = ["-std=c++17", "-O2", "-Wall", "-Wextra", "-fvisibility=hidden", "-fvisibility-inlines-hidden"]
 const LIBFLAGS = ["-fPIC", "-shared"]          # plus -Wl,--version-script=exports.map
-const LDFLAGS = ["-Wl,--no-undefined"]
+# --disable-new-dtags records the rpath (see gxx) as DT_RPATH, which the
+# loader searches before LD_LIBRARY_PATH; DT_RUNPATH comes after it, so
+# another TensorRT on LD_LIBRARY_PATH would replace the one detect() found.
+const LDFLAGS = ["-Wl,--no-undefined", "-Wl,--disable-new-dtags"]
 
 native_key(sys::System, csrc) = Dict{String,Any}(
     "csrc_sha256" => csrc_hash(csrc),

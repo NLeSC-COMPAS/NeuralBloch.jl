@@ -1,5 +1,7 @@
 # system.jl: finding TensorRT, the headers, g++ and the GPU.
 
+using Libdl: Libdl
+
 tier(:T0, "system: parsing") do
     trt11 = """
     #define NV_INFER_VERSION_H
@@ -121,6 +123,23 @@ tier(:T0, "system: report") do
     @test TensorRT.detect() isa TensorRT.System
     @test NeuralBloch.functional() isa Bool
     @test occursin("TensorRT", sprint(NeuralBloch.versioninfo))
+end
+
+# TENSORRT_ROOT's libraries come before the system's even when the system
+# has one of a major that is tried first. libc.so.6 stands in for the
+# system's library, a stub libc.so.7 in the prefix for TENSORRT_ROOT's.
+tier(:T1, "system: TENSORRT_ROOT's libraries come first") do
+    mktempdir() do root
+        stub = joinpath(mkpath(joinpath(root, "lib")), "libc.so.7")
+        run(pipeline(`$(SYSTEM.compiler.path) -shared -fPIC -x c++ - -o $stub -Wl,-soname,libnb-root-stub.so`;
+                     stdin = IOBuffer("")))
+        withenv("TENSORRT_ROOT" => root) do
+            @test Libdl.dlpath(TensorRT.load_library("libc", (6, 7))) == stub
+        end
+        withenv("TENSORRT_ROOT" => nothing) do
+            @test Libdl.dlpath(TensorRT.load_library("libc", (6, 7))) != stub
+        end
+    end
 end
 
 # What detection finds must be what the package manager installed.

@@ -160,9 +160,12 @@ function find_cuda_headers()
 end
 
 # dlopen the first `stem.so.<major>` that loads; the library stays loaded.
+# TENSORRT_ROOT's lib directory is tried with every major before the loader's
+# search, so a system TensorRT never wins over the prefix's, whatever their
+# majors.
 function load_library(stem, majors)
-    for m in majors, name in [root_dirs("lib/$stem.so.$m"); "$stem.so.$m"]
-        h = Libdl.dlopen(name; throw_error = false)
+    for dir in [root_dirs("lib"); ""], m in majors
+        h = Libdl.dlopen(joinpath(dir, "$stem.so.$m"); throw_error = false)
         h === nothing || return h
     end
     return nothing

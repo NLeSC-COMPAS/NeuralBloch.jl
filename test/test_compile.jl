@@ -75,6 +75,23 @@ tier(:T1, "compile: products") do
         end
         @test occursin("libnvonnxparser.so", read(`ldd $(native.builder)`, String))
 
+        # Both record TensorRT's directory as DT_RPATH, which LD_LIBRARY_PATH
+        # cannot override (DT_RUNPATH it could).
+        for f in (native.library, native.builder)
+            dyn = read(`readelf -d $f`, String)
+            @test occursin("(RPATH)", dyn) && occursin("[$(dirname(sys.nvinfer.path))]", dyn)
+            @test !occursin("(RUNPATH)", dyn)
+        end
+        mktempdir() do other                          # another "TensorRT", without its symbols
+            stub = joinpath(other, "libnvinfer.so.$(sys.nvinfer.version.major)")
+            run(pipeline(`$(sys.compiler.path) -shared -fPIC -x c++ - -o $stub -Wl,-soname,$(basename(stub))`;
+                         stdin = IOBuffer("")))
+            withenv("LD_LIBRARY_PATH" => other) do
+                @test TOML.parse(read(`$(native.builder) --version`, String))["tensorrt_library"] ==
+                      TensorRT.vstring(sys.nvinfer.version)
+            end
+        end
+
         # The versions both products report are the ones system.jl found.
         lib = Libdl.dlopen(native.library)
         version(f) = (v = zeros(Int32, 4); ccall(Libdl.dlsym(lib, f), Cvoid, (Ptr{Int32},), v);
