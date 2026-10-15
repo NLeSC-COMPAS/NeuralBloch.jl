@@ -19,7 +19,7 @@ Base.showerror(io::IO, e::BundleError) = print(io, "BundleError: ", e.msg)
 const Range = Tuple{Float64,Float64}
 
 # The card format this package reads: the one NeuralBloch's export_bundle
-# writes (src/bundle.py, FORMAT).
+# writes (scripts/export_bundle.py, FORMAT).
 const FORMAT = 2
 
 # What the model can compute, each from its own ONNX model and engine:

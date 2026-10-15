@@ -3,10 +3,11 @@
 # (T1, dT1, …) meet the public Unicode ones (T₁, ∂T₁, …).
 #
 # The contract is what this package requires of each target's engine tensors,
-# copied from the upstream model (src/model.py, src/targets.py): one input and
-# the target's outputs, no others, all Float32. Shapes are in TensorRT's
-# row-major order, -1 being the dynamic batch; NTR (readouts per voxel) and
-# the rank (basis coefficients per voxel) come from the model card.
+# copied from the upstream model (src/model.py, TARGETS in
+# scripts/export_onnx.py): one input and the target's outputs, no others, all
+# Float32. Shapes are in TensorRT's row-major order, -1 being the dynamic
+# batch; NTR (readouts per voxel) and the rank (basis coefficients per voxel)
+# come from the model card.
 #   x             input,  (batch, 3): per voxel [T₁, T₂, B₁] in physical units
 #                 (the network takes the log of T₁ and T₂ itself);
 #   signal        output, (batch, NTR, 2): (Re, Im) on the last axis;
