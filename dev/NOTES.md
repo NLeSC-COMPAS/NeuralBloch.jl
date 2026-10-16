@@ -490,15 +490,22 @@ three-output set; the binding is now spelled out per output set.
 The model no longer lives in `models/`. NeuralBloch publishes it as the
 release `model-fisp600-rank16-v0.1.0-beta.1`, a pre-release, and Pkg installs
 it with this package as the artifact `neuralbloch_fisp600_rank16` (D24).
-NeuralBloch exported it at commit `b421e7d`, with semantic model versions, the
+NeuralBloch exported it at commit `0f18445`, with semantic model versions, the
 release file, and the card as `model_card.toml`, versioned by its own
 `schema_version = "1.0"` (D25). `dev/bind_bundle.jl` bound that file:
 
 | | |
 |---|---|
-| File | `neuralbloch-model-fisp600-rank16-v0.1.0-beta.1.tar.gz`, 1,083,536 bytes |
-| sha256 | `d991cbc670133085cbe6c76e2d49ee02e24a6bf76540f4ed5e66e2cf790507f9` |
-| git-tree-sha1 | `6f6bd539916817c53db127e668a4f6576f48f5e6` |
+| File | `neuralbloch-model-fisp600-rank16-v0.1.0-beta.1.tar.gz`, 1,083,547 bytes |
+| sha256 | `451e234f45a8e55a483f6d303797c75a43db2727d357eb774b88f78b5c5b5c79` |
+| git-tree-sha1 | `cdbeed78dfa5e0d70106cd17176903e66ca3341a` |
+
+It replaced the file of the same version exported at `b421e7d`, which was
+bound but never published: NeuralBloch's next commit reworded the card's
+header comment, and the release comes from the tip of its branch. Since
+`bind_bundle.jl` refuses a second file for one version, as it should for a
+published one, the new file was bound into an empty `Artifacts.toml` that then
+replaced the old one.
 
 The network is v1's: the same checkpoint (epoch 4970), and ONNX models with
 the same weights, nodes, inputs and outputs. Only each node's metadata
@@ -506,13 +513,13 @@ differs, since NeuralBloch moved its export helpers into its scripts: it now
 names the export wrapper `scripts.export_onnx.TargetModel` instead of
 `src.targets.TargetModel`. With it, the three sha256 pins changed. The card
 differs from v1's in its file name, its first field (`schema_version = "1.0"`
-instead of `format = 2`), its version, its provenance commit and those pins. A
-second export at the same commit wrote the same tarball, byte for byte.
+instead of `format = 2`), its version, its provenance commit and those pins.
+Packing the bundle again gives the same tarball, byte for byte.
 
 **Before publication**, `bind_bundle.jl` installed the release file through
 Pkg from its local path, with Pkg's own unpacking and checks of both hashes,
 so the suite and `scripts/validate.jl` ran against the artifact as users will
-get it: 812 tests passed (1 broken, the Aqua marker), and the accuracy is
+get it: 813 tests passed (1 broken, the Aqua marker), and the accuracy is
 v1's to every printed digit, 1.2141 / 0.7043 / 1.1466 % on `validate.jl`'s
 set and 1.1837 / 0.6952 / 1.1449 % on the T3 set. `scripts/distribution.jl`
 downloads the artifact from the release, so it can run only once the release

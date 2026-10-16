@@ -50,7 +50,7 @@ tier(:T0, "model: the default bundle") do
     @test length(s.rf_angle) == length(s.rf_phase) == 600
     @test (s.rf_angle[1], s.rf_angle[end]) == (3.960833, parse(Float64, last(readlines(joinpath(BUNDLE, "rf_data", "rf_angle_list.txt")))))
     @test s.rf_phase[1] == -1.9641
-    @test m.provenance["upstream"] == "NeuralBloch@b421e7df5349359d82b55239148c41ac878c54ea"
+    @test m.provenance["upstream"] == "NeuralBloch@0f18445ba5f6453c1f4d2f59d8da7e4b0afde06d"
     @test (m.provenance["checkpoint_epoch"], m.provenance["blochsimulators"], m.provenance["precision"]) ==
           ("4970", "0.10.0", "FP32")
     @test occursin(r"^[0-9a-f]{64}$", m.provenance["config_sha256"])

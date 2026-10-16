@@ -1,6 +1,6 @@
 [neuralbloch_fisp600_rank16]
-git-tree-sha1 = "6f6bd539916817c53db127e668a4f6576f48f5e6"
+git-tree-sha1 = "cdbeed78dfa5e0d70106cd17176903e66ca3341a"
 
     [[neuralbloch_fisp600_rank16.download]]
-    sha256 = "d991cbc670133085cbe6c76e2d49ee02e24a6bf76540f4ed5e66e2cf790507f9"
+    sha256 = "451e234f45a8e55a483f6d303797c75a43db2727d357eb774b88f78b5c5b5c79"
     url = "https://github.com/NLeSC-COMPAS/NeuralBloch/releases/download/model-fisp600-rank16-v0.1.0-beta.1/neuralbloch-model-fisp600-rank16-v0.1.0-beta.1.tar.gz"
