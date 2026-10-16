@@ -14,16 +14,16 @@ const PINNED = (signal_and_derivatives = "757a2fd6a70e4ac6aad3b89596ea0c6f63f17d
                 signal = "0e23650b9df0b2680c40c2a7f13a6fd1e607195a3f844baca0920de7f9ea8c25",
                 coefficients = "c5e5b642208c941b87896791853b5e423f3a842fb6bd38a8cb6c1edcb1d4f0bc")
 
-# A private copy of the bundle whose card.toml is `edit`(original text). The
-# artifact's files are read-only, and cp keeps their mode, so the copy's are
-# made writable.
+# A private copy of the bundle whose model_card.toml is `edit`(original text).
+# The artifact's files are read-only, and cp keeps their mode, so the copy's
+# are made writable.
 function edited_bundle(edit, dir)
     b = joinpath(dir, "bundle")
     cp(BUNDLE, b)
     for (root, _, names) in walkdir(b), name in names
         chmod(joinpath(root, name), 0o644)
     end
-    card = joinpath(b, "card.toml")
+    card = joinpath(b, "model_card.toml")
     write(card, edit(read(card, String)))
     return b
 end
@@ -48,7 +48,7 @@ tier(:T0, "model: the default bundle") do
     @test length(s.rf_angle) == length(s.rf_phase) == 600
     @test (s.rf_angle[1], s.rf_angle[end]) == (3.960833, parse(Float64, last(readlines(joinpath(BUNDLE, "rf_data", "rf_angle_list.txt")))))
     @test s.rf_phase[1] == -1.9641
-    @test m.provenance["upstream"] == "NeuralBloch@f27c651a4b765252c7ee080f566eda0313b6bf4f"
+    @test m.provenance["upstream"] == "NeuralBloch@b421e7df5349359d82b55239148c41ac878c54ea"
     @test (m.provenance["checkpoint_epoch"], m.provenance["blochsimulators"], m.provenance["precision"]) ==
           ("4970", "0.10.0", "FP32")
     @test occursin(r"^[0-9a-f]{64}$", m.provenance["config_sha256"])
@@ -64,14 +64,37 @@ tier(:T0, "model: a forward-difference card states its steps") do
     end
 end
 
+tier(:T0, "model: a newer MINOR of the card's schema only adds fields") do
+    mktempdir() do dir
+        newer(s) = replace(s, "schema_version = \"1.0\"" => "schema_version = \"1.3\"",
+                           "rank = 16" => "rank = 16\nnote = \"a field of schema 1.3\"") * "\n[added]\nkey = 1\n"
+        m, default = Model(edited_bundle(newer, dir)), Model()
+        @test (m.family, m.version, m.ntr, m.rank, m.domain, m.sequence) ==
+              (default.family, default.version, default.ntr, default.rank, default.domain, default.sequence)
+    end
+    # A card from before the schema: card.toml, without model_card.toml
+    mktempdir() do dir
+        b = edited_bundle(identity, dir)
+        mv(joinpath(b, "model_card.toml"), joinpath(b, "card.toml"))
+        err = @test_throws BundleError Model(b)
+        @test occursin("has card.toml, a card from before schema version 1.0, but no model_card.toml",
+                       sprint(showerror, err.value))
+    end
+end
+
 tier(:T0, "model: malformed cards") do
     sensitivity = "method = \"forward sensitivity\""
     version = "version = \"0.1.0-beta.1\""
     semantic = "[model] version must be a semantic version MAJOR.MINOR.PATCH[-PRERELEASE] without build metadata"
+    schema = "schema_version = \"1.0\""
     cases = [  # edit of the card => words the error must contain
-        (s -> replace(s, r"format = 3[^\n]*\n" => "")) => "has no format",
-        (s -> replace(s, "format = 3" => "format = 2")) => "has card format 2; this NeuralBloch reads format 3",
-        (s -> replace(s, "format = 3" => "format = \"3\"")) => "has card format \"3\"",
+        (s -> replace(s, r"schema_version = [^\n]*\n" => "")) => "has no schema_version; this NeuralBloch reads schema 1.x",
+        (s -> replace(s, schema => "schema_version = \"2.0\"")) => "has schema_version 2.0; this NeuralBloch reads schema 1.x",
+        (s -> replace(s, schema => "schema_version = \"0.9\"")) => "has schema_version 0.9; this NeuralBloch reads schema 1.x",
+        (s -> replace(s, schema => "schema_version = 1.0")) => "schema_version must be \"MAJOR.MINOR\", e.g. \"1.0\", not 1.0",
+        (s -> replace(s, schema => "schema_version = \"1\"")) => "schema_version must be \"MAJOR.MINOR\"",
+        (s -> replace(s, schema => "schema_version = \"1.0.0\"")) => "schema_version must be \"MAJOR.MINOR\"",
+        (s -> replace(s, schema => "schema_version = \"01.0\"")) => "schema_version must be \"MAJOR.MINOR\"",
         (s -> replace(s, r"\[domain\].*?\n\n"s => "")) => "table [domain] is missing",
         (s -> replace(s, r"\nntr = 600[^\n]*" => "")) => "[model] ntr is missing",
         (s -> replace(s, "ntr = 600" => "ntr = \"600\"")) => "[model] ntr must be an integer",
@@ -110,7 +133,7 @@ tier(:T0, "model: malformed cards") do
             err = @test_throws BundleError Model(edited_bundle(edit, dir))
             msg = sprint(showerror, err.value)
             @test occursin(words, msg)
-            @test occursin("card.toml", msg)                  # which file to fix
+            @test occursin("model_card.toml", msg)            # which file to fix
         end
     end
 end
@@ -250,7 +273,8 @@ tier(:T0, "model: bind_bundle.jl binds a release file within the family's contra
                 "files its card does not name: stray.txt",
             release(identity, "0.1.0-beta.5"; name = basename(url("0.1.0-beta.6"))) =>
                 "must be named $(basename(url("0.1.0-beta.5")))",
-            release(s -> replace(s, "format = 3" => "format = 9"), "0.1.0-beta.7") => "has card format 9",
+            release(s -> replace(s, "schema_version = \"1.0\"" => "schema_version = \"9.0\""), "0.1.0-beta.7") =>
+                "has schema_version 9.0",
             truncated => "not a gzip-compressed tarball",
         ]
         for (file, words) in cases

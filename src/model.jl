@@ -2,8 +2,8 @@
 # of the sequence the network was trained on. NeuralBloch's export_bundle
 # writes the bundle and NeuralBloch publishes it as a release, which Pkg
 # installs with this package as an artifact (Artifacts.toml); nothing in it
-# is edited here. The card (card.toml) uses ASCII names (T1, dT1, …); io.jl
-# converts them for the public API.
+# is edited here. The card (model_card.toml) uses ASCII names (T1, dT1, …);
+# io.jl converts them for the public API.
 
 """
     BundleError(msg)
@@ -20,9 +20,13 @@ Base.showerror(io::IO, e::BundleError) = print(io, "BundleError: ", e.msg)
 
 const Range = Tuple{Float64,Float64}
 
-# The card format this package reads: the one NeuralBloch's export_bundle
-# writes (scripts/export_bundle.py, FORMAT).
-const FORMAT = 3
+# The card's file in a bundle, and the MAJOR of the card schema this package
+# reads, as NeuralBloch's export_bundle writes them (scripts/export_bundle.py,
+# CARD and SCHEMA_VERSION). The card's schema_version is "MAJOR.MINOR": a
+# newer MINOR only adds fields, which are ignored here, and another MAJOR
+# changes the card, so it is refused.
+const CARD = "model_card.toml"
+const SCHEMA_MAJOR = 1
 
 # What the model can compute, each from its own ONNX model and engine:
 #   signal_and_derivatives  signal, ∂T₁, ∂T₂   (upstream FCModel.forward)
@@ -56,14 +60,14 @@ const SEMVER = Regex(raw"\A(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]
 """
     Model(dir = the fisp600-rank16 artifact)
 
-A NeuralBloch model bundle: `dir/card.toml` and the files it names, an ONNX
-model per target and the RF tables. Without `dir`, the `fisp600-rank16`
+A NeuralBloch model bundle: `dir/model_card.toml` and the files it names, an
+ONNX model per target and the RF tables. Without `dir`, the `fisp600-rank16`
 bundle that this package's Artifacts.toml binds, which Pkg downloads from
 NeuralBloch's release when it installs the package; any other bundle, such as
 your own export, is read from its directory. Loading checks all of it: the
-card's format, every field present and well-typed, each ONNX's sha256 the one
-the card pins, and the RF tables with one entry per readout. Any problem is a
-[`BundleError`](@ref).
+card's schema version (any 1.x), every field present and well-typed, each
+ONNX's sha256 the one the card pins, and the RF tables with one entry per
+readout. Any problem is a [`BundleError`](@ref).
 
 The fields hold the card: `family` and `version` (the model's name: a family
 such as `fisp600-rank16` and a semantic version such as `v"0.1.0-beta.1"`),
@@ -140,7 +144,7 @@ function rftable(file, ntr)
         push!(values, v)
     end
     length(values) == ntr ||
-        throw(BundleError("$file has $(length(values)) values; [model] ntr is $ntr (see card.toml)"))
+        throw(BundleError("$file has $(length(values)) values; [model] ntr is $ntr (see $CARD)"))
     return values
 end
 
@@ -153,8 +157,13 @@ end
 
 function Model(dir::AbstractString = artifact"neuralbloch_fisp600_rank16")
     dir = abspath(dir)
-    path = joinpath(dir, "card.toml")
-    isfile(path) || throw(BundleError("$dir has no card.toml: it is not a model bundle"))
+    path = joinpath(dir, CARD)
+    if !isfile(path)
+        isfile(joinpath(dir, "card.toml")) && throw(BundleError(
+            "$dir has card.toml, a card from before schema version 1.0, but no $CARD, which this " *
+            "NeuralBloch reads. Use a bundle written by a newer NeuralBloch export_bundle"))
+        throw(BundleError("$dir has no $CARD: it is not a model bundle"))
+    end
     card = try
         TOML.parsefile(path)
     catch err
@@ -165,12 +174,13 @@ function Model(dir::AbstractString = artifact"neuralbloch_fisp600_rank16")
     positive(T, table, key) = (v = need(T, table, key);
                                v > 0 || throw(BundleError("$path: [$table] $key must be positive, not $v")); v)
 
-    format = get(card, "format", nothing)
-    format === nothing && throw(BundleError(
-        "$path has no format: it predates card format $FORMAT, which this NeuralBloch reads. " *
-        "Use a bundle written by NeuralBloch's export_bundle"))
-    format == FORMAT || throw(BundleError(
-        "$path has card format $(repr(format)); this NeuralBloch reads format $FORMAT"))
+    schema = get(card, "schema_version", nothing)
+    schema === nothing && throw(BundleError("$path has no schema_version; this NeuralBloch reads schema $SCHEMA_MAJOR.x"))
+    parts = schema isa AbstractString ? match(r"\A(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\z", schema) : nothing
+    parts === nothing && throw(BundleError(
+        "$path: schema_version must be \"MAJOR.MINOR\", e.g. \"$SCHEMA_MAJOR.0\", not $(repr(schema))"))
+    parse(Int, parts[1]) == SCHEMA_MAJOR || throw(BundleError(
+        "$path has schema_version $schema; this NeuralBloch reads schema $SCHEMA_MAJOR.x"))
 
     family = need(String, "model", "family")
     version = need(VersionNumber, "model", "version")

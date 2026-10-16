@@ -490,28 +490,29 @@ three-output set; the binding is now spelled out per output set.
 The model no longer lives in `models/`. NeuralBloch publishes it as the
 release `model-fisp600-rank16-v0.1.0-beta.1`, a pre-release, and Pkg installs
 it with this package as the artifact `neuralbloch_fisp600_rank16` (D24).
-NeuralBloch exported it at commit `f27c651`, the first with semantic model
-versions (card format 3, D25) and the release file, and `dev/bind_bundle.jl`
-bound that file:
+NeuralBloch exported it at commit `b421e7d`, with semantic model versions, the
+release file, and the card as `model_card.toml`, versioned by its own
+`schema_version = "1.0"` (D25). `dev/bind_bundle.jl` bound that file:
 
 | | |
 |---|---|
-| File | `neuralbloch-model-fisp600-rank16-v0.1.0-beta.1.tar.gz`, 1,083,497 bytes |
-| sha256 | `aa586070336140444aabe5c93e887a23b2297d0cc6d5b92e5dc734277ce51bc3` |
-| git-tree-sha1 | `f9ecbb92ef7c29471b88c03954b0fa6ca7382078` |
+| File | `neuralbloch-model-fisp600-rank16-v0.1.0-beta.1.tar.gz`, 1,083,536 bytes |
+| sha256 | `d991cbc670133085cbe6c76e2d49ee02e24a6bf76540f4ed5e66e2cf790507f9` |
+| git-tree-sha1 | `6f6bd539916817c53db127e668a4f6576f48f5e6` |
 
 The network is v1's: the same checkpoint (epoch 4970), and ONNX models with
 the same weights, nodes, inputs and outputs. Only each node's metadata
 differs, since NeuralBloch moved its export helpers into its scripts: it now
 names the export wrapper `scripts.export_onnx.TargetModel` instead of
 `src.targets.TargetModel`. With it, the three sha256 pins changed. The card
-differs from v1's in its format, version, provenance commit and those pins. A
+differs from v1's in its file name, its first field (`schema_version = "1.0"`
+instead of `format = 2`), its version, its provenance commit and those pins. A
 second export at the same commit wrote the same tarball, byte for byte.
 
 **Before publication**, `bind_bundle.jl` installed the release file through
 Pkg from its local path, with Pkg's own unpacking and checks of both hashes,
 so the suite and `scripts/validate.jl` ran against the artifact as users will
-get it: 797 tests passed (1 broken, the Aqua marker), and the accuracy is
+get it: 812 tests passed (1 broken, the Aqua marker), and the accuracy is
 v1's to every printed digit, 1.2141 / 0.7043 / 1.1466 % on `validate.jl`'s
 set and 1.1837 / 0.6952 / 1.1449 % on the T3 set. `scripts/distribution.jl`
 downloads the artifact from the release, so it can run only once the release
@@ -543,9 +544,9 @@ table recommends an option, implementation follows that recommendation.
 | D17 | CUDA graph | Not in v1 | S9 |
 | D18 | Tolerances | Bitwise within one engine; 5e-6 relative between builds | S2, S4, S6 |
 | D19 | Input staging | Three strided `cuMemcpy2DAsync`: zero host allocation, ≈ 3% of engine time | S10 |
-| D20 | The bundle and its card | Made entirely by NeuralBloch (`export_bundle`) and never edited here; delivered as an artifact (D24); card format 3 since D25 (family, semantic version, rank, an ONNX model and sha256 per target, the derivative method with steps only for forward differences); `Model` reads format 3 only | three-engine plan |
+| D20 | The bundle and its card | Made entirely by NeuralBloch (`export_bundle`) and never edited here; delivered as an artifact (D24); the card, `model_card.toml` with its own `schema_version` (D25), states the family, semantic version, rank, an ONNX model and sha256 per target, and the derivative method with steps only for forward differences; `Model` reads schema 1.x | three-engine plan |
 | D21 | Targets | One TensorRT engine per target (signal and derivatives, signal, coefficients), in one `Engine`; the keys of `out` choose it; `outputs`/`predict` take `target` | three-engine plan |
 | D22 | Input buffers | One `(3, max)` buffer per target: `claim!` orders the runs of one handle only, so a shared buffer could be overwritten by another target's run on another stream | three-engine plan |
 | D23 | Bundle updates | ~~`dev/update_bundle.jl` installs a bundle into `models/`~~ `dev/bind_bundle.jl` binds a release file (D24); within a family, `contract_problems` (in the package, so the suite tests it) requires the same readouts, rank, sequence, RF tables and constraint, a domain the same or wider, and a higher version. Field by field, not a stored hash: it names what differs, and a wider domain is allowed | three-engine plan |
 | D24 | Bundle delivery | A non-lazy Pkg artifact per family, `neuralbloch_<family>` in `Artifacts.toml`, downloaded with the package from NeuralBloch's release `model-<family>-v<version>`, whose one file is the bundle's reproducible tarball; `Model()` reads `neuralbloch_fisp600_rank16`. `dev/bind_bundle.jl` binds a local release file before it is published, installing it through Pkg's own unpacking and checks of both hashes. Model releases are pre-releases or not marked latest; a published file is never replaced, so a fix is a new version | three-engine plan, phase 2 |
-| D25 | Model versions | Semantic versions without build metadata, e.g. `0.1.0-beta.1`, written as a string: card format 3. PATCH re-exports the same weights, MINOR brings new weights or a wider domain, MAJOR stays 0 until the family is stable. Only the order is enforced: `VersionNumber`, after the strict pattern | user decision, 2026-10-15 |
+| D25 | Model and card versions | The model's version is a semantic version without build metadata, e.g. `0.1.0-beta.1`: PATCH re-exports the same weights, MINOR brings new weights or a wider domain, MAJOR stays 0 until the family is stable. Only the order is enforced: `VersionNumber`, after the strict pattern. The card versions itself separately: `model_card.toml` (formerly `card.toml`) starts with `schema_version = "1.0"`, "MAJOR.MINOR", replacing the integer `format` (1 to 3, never published). A newer MINOR only adds fields, which `Model` ignores; another MAJOR is refused | user decisions, 2026-10-15 and 2026-10-16 |

@@ -44,9 +44,9 @@ artifact_name(family) = "neuralbloch_" * replace(family, '-' => '_')
 
 # The card and every file it names, relative to the bundle.
 function bundlefiles(dir)
-    card = TOML.parsefile(joinpath(dir, "card.toml"))
+    card = TOML.parsefile(joinpath(dir, NeuralBloch.CARD))
     onnx = [card["model"][String(target)]["onnx"] for target in NeuralBloch.TARGETS]
-    return sort!(["card.toml"; onnx; card["sequence"]["rf_angle"]; card["sequence"]["rf_phase"]])
+    return sort!([NeuralBloch.CARD; onnx; card["sequence"]["rf_angle"]; card["sequence"]["rf_phase"]])
 end
 
 # Every file under `dir`, relative to it.

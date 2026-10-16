@@ -69,7 +69,7 @@ Goal: turn each target's ONNX model into a serialized `model.engine` for this GP
 
 | File | Role |
 |---|---|
-| `src/model.jl` | `Model()` reads the `fisp600-rank16` artifact, which `Artifacts.toml` binds and Pkg installs read-only in the depot, or `Model(dir)` any bundle directory. It checks `card.toml` (format 3), each target's ONNX sha256 pin and the RF tables, and supplies the ONNX paths. |
+| `src/model.jl` | `Model()` reads the `fisp600-rank16` artifact, which `Artifacts.toml` binds and Pkg installs read-only in the depot, or `Model(dir)` any bundle directory. It checks `model_card.toml` (schema 1.x), each target's ONNX sha256 pin and the RF tables, and supplies the ONNX paths. |
 | `src/predict.jl` | `Engine(model; batch, tf32)` creates the `BuildSettings` and calls `build` for each target, before opening any. |
 | `src/tensorrt/system.jl` | `require(sys)` also checks the GPU; supplies name, capability and UUID for the engine key and `CUDA_VISIBLE_DEVICES`. |
 | `src/tensorrt/build.jl` | `BuildSettings`, `build()`, and `run_builder` (subprocess, watchdog, exit-code messages, `BuildError`). Before the subprocess starts, `build` returns CUDA.jl's pooled memory to the driver. |
