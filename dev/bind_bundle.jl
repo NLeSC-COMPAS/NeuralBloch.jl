@@ -1,61 +1,61 @@
-# Bind a model release file, written by NeuralBloch's export_bundle, as this
-# package's artifact for its model family:
+# Bind a model release file as the artifact of this package for its model
+# family. The export_bundle script of NeuralBloch writes the release file.
 #
 #     julia --project dev/bind_bundle.jl TARBALL [ARTIFACTS_TOML]
 #
-# TARBALL is NeuralBloch's outputs/neuralbloch-model-<family>-v<version>.tar.gz,
-# the exact file to attach to NeuralBloch's release model-<family>-v<version>;
-# ARTIFACTS_TOML defaults to this package's Artifacts.toml. Nothing is
-# downloaded or published: Pkg installs the file from its local path,
-# unpacking it and checking both its hashes as it will after downloading the
-# release, so the entry is tested before the release exists.
+# TARBALL is outputs/neuralbloch-model-<family>-v<version>.tar.gz of
+# NeuralBloch. Attach this exact file to the NeuralBloch release
+# model-<family>-v<version>. The default ARTIFACTS_TOML is the Artifacts.toml
+# of this package. The script does not download or publish. Pkg installs the
+# file from its local path. Pkg unpacks the file and checks its two hashes, as
+# it does after it downloads the release. Thus, the test of the entry occurs
+# before the release exists.
 #
-# The file must hold a bundle this NeuralBloch reads, nothing but the card and
-# the files it names, under the name its card's family and version give. When
-# ARTIFACTS_TOML binds an earlier version of the family, the new one must keep
-# the family's contract (NeuralBloch.contract_problems): the same readouts,
-# rank, sequence and RF tables, a training domain that is the same or wider,
-# and a higher version. Otherwise nothing changes and the problems are listed
-# (exit code 1). A file that is already bound changes nothing (exit code 0);
-# another family gets an entry of its own.
+# Requirements for the file:
 #
-# The entry, neuralbloch_<family> with hyphens as underscores, is not lazy:
-# Pkg downloads it with the package, from the release URL, and checks the
-# file's sha256 and its tree hash. Publish the release with this exact file
-# before pushing a commit that binds it.
+# - It contains a bundle that this NeuralBloch reads, and only the card and
+#   the files that the card names.
+# - Its name agrees with the family and the version of its card.
+# - If ARTIFACTS_TOML binds an earlier version of the family, the new version
+#   keeps the contract of the family (NeuralBloch.contract_problems): the same
+#   readouts, rank, sequence and RF tables, a training domain that is the same
+#   or larger, and a higher version.
+#
+# If a requirement is not satisfied, the script changes nothing, lists the
+# problems and exits with code 1. If the file is already bound, the script
+# changes nothing and exits with code 0. A different family gets a new entry.
+#
+# The entry is neuralbloch_<family>, with underscores in place of hyphens. The
+# entry is not lazy: Pkg downloads it with the package, from the release URL,
+# and checks the sha256 of the file and its tree hash. Publish the release with
+# this exact file before you push a commit that binds it.
 
 using NeuralBloch
 using NeuralBloch: BundleError, contract_problems
 using Pkg.Artifacts: artifact_hash, artifact_path, bind_artifact!, download_artifact, ensure_artifact_installed
 using SHA: sha256
 using Tar: Tar
-using TOML: TOML
 
-# Where NeuralBloch publishes its releases, and the names its export_bundle
-# gives a family version's release and file (scripts/export_bundle.py:
-# release_tag, tarball_name).
+# The location of the NeuralBloch releases, and the names that export_bundle
+# gives to the release and the file of a family version
+# (scripts/export_bundle.py: release_tag, tarball_name).
 const RELEASES = "https://github.com/NLeSC-COMPAS/NeuralBloch/releases/download"
 release_tag(family, version) = "model-$family-v$version"
 tarball_name(family, version) = "neuralbloch-$(release_tag(family, version)).tar.gz"
 release_url(family, version) = "$RELEASES/$(release_tag(family, version))/$(tarball_name(family, version))"
 
-# A family's entry in Artifacts.toml, e.g. neuralbloch_fisp600_rank16.
+# The entry of a family in Artifacts.toml, for example
+# neuralbloch_fisp600_rank16.
 artifact_name(family) = "neuralbloch_" * replace(family, '-' => '_')
 
-# The card and every file it names, relative to the bundle.
-function bundlefiles(dir)
-    card = TOML.parsefile(joinpath(dir, NeuralBloch.CARD))
-    onnx = [card["model"][String(target)]["onnx"] for target in NeuralBloch.TARGETS]
-    return sort!([NeuralBloch.CARD; onnx; card["sequence"]["rf_angle"]; card["sequence"]["rf_phase"]])
-end
-
-# Every file under `dir`, relative to it.
+# All the files in `dir`, relative to `dir`.
 filesunder(dir) = sort!([relpath(joinpath(root, name), dir) for (root, _, names) in walkdir(dir) for name in names])
 
-# The bundle in `dir`, or the BundleError that refuses it.
+# Return the bundle in `dir`, or the BundleError that refuses it.
 loaded(dir) = try Model(dir) catch err; err isa BundleError ? err : rethrow() end
 
-# The exit code; the test suite calls it with buffers for stdout and stderr.
+# Return the exit code. The test suite calls this function with buffers for
+# stdout and stderr.
 function main(args; stdout::IO = Base.stdout, stderr::IO = Base.stderr)
     if !(1 ≤ length(args) ≤ 2)
         println(stderr, "usage: julia --project dev/bind_bundle.jl TARBALL [ARTIFACTS_TOML]")
@@ -66,16 +66,16 @@ function main(args; stdout::IO = Base.stdout, stderr::IO = Base.stderr)
     refuse(why...) = (println(stderr, "Refusing $tarball: ", why...); 1)
     isfile(tarball) || return refuse("there is no such file")
 
-    # Both hashes from the file itself: its sha256, and the git tree hash of
-    # what it holds, which names the artifact
+    # Calculate the two hashes from the file: its sha256, and the git tree hash
+    # of its contents. The tree hash is the name of the artifact.
     sha = bytes2hex(open(sha256, tarball))
     tree = try
         Base.SHA1(Tar.tree_hash(`gzip -dc $tarball`))
     catch err
         return refuse("it is not a gzip-compressed tarball: ", sprint(showerror, err))
     end
-    # Pkg's own unpacking and checks of both hashes, as after a download.
-    # JULIA_PKG_IGNORE_HASHES would let a tree hash mismatch pass.
+    # Pkg unpacks the file and checks the two hashes, as after a download.
+    # Unset JULIA_PKG_IGNORE_HASHES: it lets a wrong tree hash pass.
     installed = withenv("JULIA_PKG_IGNORE_HASHES" => nothing) do
         download_artifact(tree, "file://" * tarball, sha; quiet_download = true, io = stderr)
     end
@@ -87,7 +87,7 @@ function main(args; stdout::IO = Base.stdout, stderr::IO = Base.stderr)
     name = tarball_name(new.family, new.version)
     basename(tarball) == name ||
         return refuse("its card is $(new.family) v$(new.version), so the release file must be named $name")
-    extra = setdiff(filesunder(dir), bundlefiles(dir))
+    extra = setdiff(filesunder(dir), new.files)
     isempty(extra) || return refuse("it holds files its card does not name: ", join(extra, ", "))
 
     entry = artifact_name(new.family)

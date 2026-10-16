@@ -14,17 +14,17 @@ const PINNED = (signal_and_derivatives = "757a2fd6a70e4ac6aad3b89596ea0c6f63f17d
                 signal = "0e23650b9df0b2680c40c2a7f13a6fd1e607195a3f844baca0920de7f9ea8c25",
                 coefficients = "c5e5b642208c941b87896791853b5e423f3a842fb6bd38a8cb6c1edcb1d4f0bc")
 
-# A private copy of the bundle whose model_card.toml is `edit`(original text).
-# The artifact's files are read-only, and cp keeps their mode, so the copy's
-# are made writable.
-function edited_bundle(edit, dir)
+# A private copy of the bundle in `dir`. Its model_card.toml is
+# `edit`(original text), with `version` in place of the original version, and
+# `files`(copy) changes the other files. The files of the artifact are
+# read-only, and cp keeps their mode, thus the test makes the copy writable.
+function edited_bundle(edit, dir; version = "0.1.0-beta.1", files = identity)
     b = joinpath(dir, "bundle")
     cp(BUNDLE, b)
-    for (root, _, names) in walkdir(b), name in names
-        chmod(joinpath(root, name), 0o644)
-    end
+    chmod(b, 0o755; recursive = true)
     card = joinpath(b, "model_card.toml")
-    write(card, edit(read(card, String)))
+    write(card, edit(replace(read(card, String), "version = \"0.1.0-beta.1\"" => "version = \"$version\"")))
+    files(b)
     return b
 end
 
@@ -38,6 +38,8 @@ tier(:T0, "model: the default bundle") do
                      coefficients = joinpath(BUNDLE, "model_coefficients.onnx"))
     @test m.sha256 == PINNED
     @test keys(m.onnx) == keys(m.sha256) == TARGETS
+    @test m.files == ["model.onnx", "model_card.toml", "model_coefficients.onnx", "model_signal.onnx",
+                      "rf_data/rf_angle_list.txt", "rf_data/rf_phase_list.txt"]
     @test m.domain == (T1 = (0.1, 6.0), T2 = (0.01, 2.0), B1 = (0.5, 1.5))
     @test m.constraint == "T2 < T1"
     @test m.derivatives == (method = "forward sensitivity", dT1_step = nothing, dT2_step = nothing)
@@ -169,18 +171,12 @@ end
 
 tier(:T0, "model: a family's contract between versions") do
     current = Model()
-    # A later bundle: `version` with `edit` applied to its card, and `files`
-    # applied to its directory.
-    function later(edit; version = "0.1.0-beta.2", files = identity)
-        dir = mktempdir()
-        b = edited_bundle(s -> edit(replace(s, "version = \"0.1.0-beta.1\"" => "version = \"$version\"")), dir)
-        files(b)
-        return Model(b)
-    end
+    # A later bundle (see edited_bundle).
+    later(edit; version = "0.1.0-beta.2", files = identity) = Model(edited_bundle(edit, mktempdir(); version, files))
     @test contract_problems(current, later(identity)) == String[]
     @test contract_problems(current, later(identity; version = "0.1.0")) == String[]   # the release after its betas
     @test contract_problems(current, later(s -> replace(s, "T1 = [0.1, 6.0]" => "T1 = [0.05, 7.0]"))) == String[]
-    cases = [  # the later bundle => words one of the problems must contain
+    cases = [  # the later bundle => words that one of the problems must contain
         later(identity; version = "0.1.0-beta.1") => "version 0.1.0-beta.1 does not follow version 0.1.0-beta.1",
         # semantic-version order: alpha before beta, a pre-release before its release
         later(identity; version = "0.1.0-alpha.9") => "version 0.1.0-alpha.9 does not follow version 0.1.0-beta.1",
@@ -203,20 +199,20 @@ tier(:T0, "model: a family's contract between versions") do
         problems = contract_problems(current, new)
         @test any(problem -> occursin(words, problem), problems)
     end
-    # Another family is another contract: nothing to compare
+    # A different family has a different contract: there is nothing to compare
     other = later(s -> replace(s, "family = \"fisp600-rank16\"" => "family = \"fisp600b-rank16\"",
                                   "B1 = [0.5, 1.5]" => "B1 = [0.6, 1.5]"))
     @test contract_problems(current, other) == String[]
 end
 
-# dev/bind_bundle.jl's functions, for its main in this process: a Julia
-# process per call would take seconds to start.
+# The functions of dev/bind_bundle.jl, to run its main in this process. A Julia
+# process for each call takes seconds to start.
 module BindBundle
 include(joinpath(@__DIR__, "..", "dev", "bind_bundle.jl"))
 end
 
-# The gzip-compressed tarball of `dir` at `path`, its files at the root, as
-# NeuralBloch's export_bundle writes a release file.
+# Write the gzip-compressed tarball of `dir` to `path`, with the files at the
+# root, as the export_bundle script of NeuralBloch writes a release file.
 function release_file(dir, path)
     open(pipeline(`gzip -9n`; stdout = path), "w") do io
         Tar.create(dir, io)
@@ -226,19 +222,15 @@ end
 
 tier(:T0, "model: bind_bundle.jl binds a release file within the family's contract") do
     mktempdir() do dir
-        depot = mkpath(joinpath(dir, "depot"))           # artifacts land here, not in ~/.julia
+        depot = mkpath(joinpath(dir, "depot"))           # the artifacts go here, not into ~/.julia
         toml = joinpath(dir, "Artifacts.toml")
         entry() = TOML.parsefile(toml)["neuralbloch_fisp600_rank16"]
         url(version) = "https://github.com/NLeSC-COMPAS/NeuralBloch/releases/download/" *
                        "model-fisp600-rank16-v$version/neuralbloch-model-fisp600-rank16-v$version.tar.gz"
-        # Version `version` of the bundle as a release file named `name`, with
-        # `edit` applied to its card and `files` to its directory
-        function release(edit, version; files = identity, name = basename(url(version)))
-            b = edited_bundle(s -> edit(replace(s, "version = \"0.1.0-beta.1\"" => "version = \"$version\"")),
-                              mkpath(joinpath(dir, "v$version")))
-            files(b)
-            return release_file(b, joinpath(dir, name))
-        end
+        # Version `version` of the bundle (see edited_bundle) as a release file
+        # with the name `name`.
+        release(edit, version; files = identity, name = basename(url(version))) =
+            release_file(edited_bundle(edit, mkpath(joinpath(dir, "v$version")); version, files), joinpath(dir, name))
         function bind(file)
             out, err = IOBuffer(), IOBuffer()
             pushfirst!(DEPOT_PATH, depot)
@@ -265,7 +257,7 @@ tier(:T0, "model: bind_bundle.jl binds a release file within the family's contra
         before = read(toml)
         truncated = joinpath(dir, "truncated.tar.gz")
         write(truncated, read(v2)[1:1000])
-        cases = [  # a release file to refuse => words the refusal must contain
+        cases = [  # a release file to refuse => words that the refusal must contain
             release(s -> replace(s, "B1 = [0.5, 1.5]" => "B1 = [0.6, 1.5]"), "0.1.0-beta.3") =>
                 "domain B1 [0.5, 1.5] → [0.6, 1.5]",
             release(identity, "0.1.0-alpha.1") => "version 0.1.0-alpha.1 does not follow version 0.1.0-beta.2",
@@ -283,9 +275,9 @@ tier(:T0, "model: bind_bundle.jl binds a release file within the family's contra
             @test read(toml) == before                                      # unchanged
         end
 
-        # What is bound is what Pkg downloads: v2's entry, its URL swapped for
-        # the local file, installs into an empty depot, with neither the
-        # package server nor the network
+        # Pkg downloads what is bound: the entry of v2, with the local file in
+        # place of its URL, installs into an empty depot, without the package
+        # server and without the network.
         offline = joinpath(dir, "Offline.toml")
         write(offline, replace(read(toml, String), url("0.1.0-beta.2") => "file://$v2"))
         fresh = mkpath(joinpath(dir, "fresh"))
@@ -294,7 +286,7 @@ tier(:T0, "model: bind_bundle.jl binds a release file within the family's contra
         delete!(env, "JULIA_LOAD_PATH")
         @test startswith(readchomp(setenv(`$(Base.julia_cmd()) --startup-file=no -e $code`, env)), fresh)
 
-        # Once as the command the README gives (read throws unless it exits with 0)
+        # One time as the command in the README (read throws if the exit code is not 0)
         script = joinpath(pkgdir(NeuralBloch), "dev", "bind_bundle.jl")
         v8 = release(s -> replace(s, "T1 = [0.1, 6.0]" => "T1 = [0.1, 8.0]"), "0.1.0-beta.8")
         env = merge(ENV, Dict("JULIA_DEPOT_PATH" => join([depot; DEPOT_PATH], ':')))

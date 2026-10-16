@@ -1,16 +1,18 @@
-# L2: the model bundle — an ONNX model per target, the card, and the RF tables
-# of the sequence the network was trained on. NeuralBloch's export_bundle
-# writes the bundle and NeuralBloch publishes it as a release, which Pkg
-# installs with this package as an artifact (Artifacts.toml); nothing in it
-# is edited here. The card (model_card.toml) uses ASCII names (T1, dT1, …);
-# io.jl converts them for the public API.
+# L2: the model bundle. The bundle has an ONNX model for each target, the card,
+# and the RF tables of the sequence that the network was trained on. The
+# export_bundle script of NeuralBloch writes the bundle, and NeuralBloch
+# publishes it as a release. Pkg installs the release with this package as an
+# artifact (Artifacts.toml). This package does not change the bundle. The card
+# (model_card.toml) uses ASCII names (T1, dT1, …). io.jl changes them to the
+# names of the public API.
 
 """
     BundleError(msg)
 
-The model bundle is incomplete or inconsistent: its card lacks a field or has
-a malformed one, a file it names is missing, or an ONNX model is not the one
-the card pins. The message names the file to fix.
+The model bundle is not complete or not consistent. Possible causes: a field
+of the card is missing or incorrect, a file that the card names is missing, or
+an ONNX model is not the model that the card pins. The message gives the file
+to correct.
 """
 struct BundleError <: Exception
     msg::String
@@ -20,63 +22,81 @@ Base.showerror(io::IO, e::BundleError) = print(io, "BundleError: ", e.msg)
 
 const Range = Tuple{Float64,Float64}
 
-# The card's file in a bundle, and the MAJOR of the card schema this package
-# reads, as NeuralBloch's export_bundle writes them (scripts/export_bundle.py,
-# CARD and SCHEMA_VERSION). The card's schema_version is "MAJOR.MINOR": a
-# newer MINOR only adds fields, which are ignored here, and another MAJOR
-# changes the card, so it is refused.
+# The file name of the card in a bundle, and the MAJOR of the card schema that
+# this package reads. The export_bundle script of NeuralBloch uses the same
+# values (scripts/export_bundle.py, CARD and SCHEMA_VERSION). The
+# schema_version of a card is "MAJOR.MINOR". A newer MINOR only adds fields,
+# and this package ignores them. A different MAJOR changes the card, and this
+# package refuses it.
 const CARD = "model_card.toml"
 const SCHEMA_MAJOR = 1
 
-# What the model can compute, each from its own ONNX model and engine:
+# The targets: what the model can calculate. Each target has its own ONNX model
+# and engine.
 #   signal_and_derivatives  signal, ∂T₁, ∂T₂   (upstream FCModel.forward)
 #   signal                  signal             (FCModel.forward_signal)
 #   coefficients            coefficients       (FCModel.forward_coefficients)
 const TARGETS = (:signal_and_derivatives, :signal, :coefficients)
 
-# A target's name, or an ArgumentError.
+# Throw an ArgumentError if `target` is not a target.
 checktarget(target::Symbol) = target in TARGETS || throw(ArgumentError(
     "target must be $(join(repr.(TARGETS), ", ", " or ")), not $(repr(target))"))
 
-# The domain constraints checkdomain implements.
+# The domain constraints that checkdomain applies.
 const CONSTRAINTS = ("T2 < T1",)
 
-# How the training targets' derivatives may have been computed.
+# The methods that can calculate the derivatives of the training targets.
 const DERIVATIVE_METHODS = ("forward sensitivity", "forward difference")
 
-# A family is named <sequence><ntr>-rank<rank>, optionally with a qualifier:
-# lowercase words joined by hyphens, exactly one of them rank<N>.
+# The name of a family is <sequence><ntr>-rank<rank>, with an optional
+# qualifier: lowercase words with hyphens between them. Exactly one word is
+# rank<N>.
 const FAMILY_PATTERN = r"^[a-z0-9]+(-[a-z0-9]+)*$"
 
-# A version is a semantic version without build metadata, as NeuralBloch's
-# export_bundle writes it (scripts/export_bundle.py, SEMVER): MAJOR.MINOR.PATCH,
-# optionally with a pre-release such as -beta.1. VersionNumber then orders
-# versions as semantic versions; on its own it would also take "1", "v0.1.0"
-# or "01.0.0".
-const PRERELEASE_PART = raw"(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
-const SEMVER = Regex(raw"\A(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)" *
-                     "(?:-$PRERELEASE_PART(?:\\.$PRERELEASE_PART)*)?" * raw"\z")
+# A version is a semantic version without build metadata: MAJOR.MINOR.PATCH,
+# with an optional pre-release such as -beta.1. The export_bundle script of
+# NeuralBloch uses the same pattern (scripts/export_bundle.py, SEMVER). After
+# this check, VersionNumber sorts the versions as semantic versions.
+# VersionNumber alone also accepts "1", "v0.1.0" or "01.0.0".
+const NUMBER = raw"(?:0|[1-9][0-9]*)"                  # no leading zeros
+const PRERELEASE_PART = "(?:$NUMBER|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
+const SEMVER = Regex("\\A$NUMBER\\.$NUMBER\\.$NUMBER(?:-$PRERELEASE_PART(?:\\.$PRERELEASE_PART)*)?\\z")
 
 """
     Model(dir = the fisp600-rank16 artifact)
 
-A NeuralBloch model bundle: `dir/model_card.toml` and the files it names, an
-ONNX model per target and the RF tables. Without `dir`, the `fisp600-rank16`
-bundle that this package's Artifacts.toml binds, which Pkg downloads from
-NeuralBloch's release when it installs the package; any other bundle, such as
-your own export, is read from its directory. Loading checks all of it: the
-card's schema version (any 1.x), every field present and well-typed, each
-ONNX's sha256 the one the card pins, and the RF tables with one entry per
-readout. Any problem is a [`BundleError`](@ref).
+A NeuralBloch model bundle: `dir/model_card.toml` and the files that it
+names, which are an ONNX model for each target and the RF tables. If you do
+not give `dir`, `Model` uses the `fisp600-rank16` bundle that the
+Artifacts.toml of this package binds. Pkg downloads this bundle from the
+NeuralBloch release when it installs the package. `Model` reads all other
+bundles, for example your own export, from their directory.
 
-The fields hold the card: `family` and `version` (the model's name: a family
-such as `fisp600-rank16` and a semantic version such as `v"0.1.0-beta.1"`),
-`ntr` (readouts per voxel), `rank` (signal basis coefficients per voxel),
-`onnx` and `sha256` (per target: `signal_and_derivatives`, `signal`,
-`coefficients`), `domain` (training ranges of T1, T2 and B1), `constraint`,
-`derivatives` (how the training targets were computed: the method, and the
-steps of forward differences), `sequence` (the FISP3D sequence, RF tables in
-degrees) and `provenance`.
+`Model` checks all of the bundle:
+
+- the schema version of the card (1.x),
+- the presence and the type of each field,
+- the sha256 of each ONNX file, against the value that the card pins,
+- the RF tables: one entry for each readout.
+
+If a check fails, `Model` throws a [`BundleError`](@ref).
+
+The fields contain the card:
+
+- `family` and `version`: the name of the model. A family is for example
+  `fisp600-rank16`. A version is a semantic version, for example
+  `v"0.1.0-beta.1"`.
+- `ntr`: the readouts for each voxel.
+- `rank`: the signal basis coefficients for each voxel.
+- `onnx` and `sha256`: one for each target (`signal_and_derivatives`,
+  `signal`, `coefficients`).
+- `files`: the card and all the files that it names, relative to `dir`.
+- `domain`: the training ranges of T1, T2 and B1. `constraint`: the domain
+  constraint.
+- `derivatives`: the method that calculated the derivatives of the training
+  targets, and the steps for forward differences.
+- `sequence`: the FISP3D sequence, with the RF tables in degrees.
+- `provenance`.
 """
 struct Model
     dir::String
@@ -86,6 +106,7 @@ struct Model
     rank::Int
     onnx::NamedTuple{TARGETS,NTuple{3,String}}
     sha256::NamedTuple{TARGETS,NTuple{3,String}}
+    files::Vector{String}
     domain::@NamedTuple{T1::Range, T2::Range, B1::Range}
     constraint::String
     derivatives::@NamedTuple{method::String, dT1_step::Union{Nothing,Float64}, dT2_step::Union{Nothing,Float64}}
@@ -106,8 +127,9 @@ describe(::Type{VersionNumber}) =
 
 isnumber(x) = x isa Real && !(x isa Bool)
 
-# card[table][key] as a T, or a BundleError naming the field. A dotted table
-# name is a nested table: "model.signal" is card["model"]["signal"].
+# Return card[table][key] as a T, or throw a BundleError that names the field.
+# A table name with dots is a nested table: "model.signal" is
+# card["model"]["signal"].
 function field(card, path, table, key, ::Type{T}) where {T}
     t = card
     for name in split(table, '.')
@@ -127,14 +149,15 @@ function field(card, path, table, key, ::Type{T}) where {T}
     throw(BundleError("$path: [$table] $key must be $(describe(T)), not $(repr(v))"))
 end
 
-# A file the card names, relative to the bundle.
+# Return the path of a file that the card names. The name is relative to the
+# bundle.
 function bundlefile(dir, path, table, key, name)
     file = joinpath(dir, name)
     isfile(file) || throw(BundleError("$path: [$table] $key names $name, which $dir does not have"))
     return file
 end
 
-# One number per line, `ntr` of them.
+# Read an RF table: one number on each line, `ntr` numbers in total.
 function rftable(file, ntr)
     values = Float64[]
     for (i, line) in enumerate(eachline(file))
@@ -148,7 +171,8 @@ function rftable(file, ntr)
     return values
 end
 
-# The rank a family name states, or nothing if it does not follow the pattern.
+# Return the rank that a family name states, or nothing if the name does not
+# agree with the pattern.
 function familyrank(family)
     occursin(FAMILY_PATTERN, family) || return nothing
     ranks = [m[1] for m in (match(r"^rank([1-9][0-9]*)$", w) for w in split(family, '-')) if m !== nothing]
@@ -171,12 +195,15 @@ function Model(dir::AbstractString = artifact"neuralbloch_fisp600_rank16")
         throw(BundleError("$path is not valid TOML: " * sprint(showerror, err)))
     end
     need(T, table, key) = field(card, path, table, key, T)
+    files = [CARD]                     # each file that the card names, relative to dir
+    file(table, key) = (f = bundlefile(dir, path, table, key, need(String, table, key));
+                        push!(files, relpath(f, dir)); f)
     positive(T, table, key) = (v = need(T, table, key);
                                v > 0 || throw(BundleError("$path: [$table] $key must be positive, not $v")); v)
 
     schema = get(card, "schema_version", nothing)
     schema === nothing && throw(BundleError("$path has no schema_version; this NeuralBloch reads schema $SCHEMA_MAJOR.x"))
-    parts = schema isa AbstractString ? match(r"\A(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\z", schema) : nothing
+    parts = schema isa AbstractString ? match(Regex("\\A($NUMBER)\\.$NUMBER\\z"), schema) : nothing
     parts === nothing && throw(BundleError(
         "$path: schema_version must be \"MAJOR.MINOR\", e.g. \"$SCHEMA_MAJOR.0\", not $(repr(schema))"))
     parse(Int, parts[1]) == SCHEMA_MAJOR || throw(BundleError(
@@ -198,11 +225,11 @@ function Model(dir::AbstractString = artifact"neuralbloch_fisp600_rank16")
         sha = need(String, table, "sha256")
         occursin(r"^[0-9a-f]{64}$", sha) ||
             throw(BundleError("$path: [$table] sha256 must be 64 hexadecimal digits, not $(repr(sha))"))
-        file = bundlefile(dir, path, table, "onnx", need(String, table, "onnx"))
-        actual = bytes2hex(open(SHA.sha256, file))
+        onnxfile = file(table, "onnx")
+        actual = bytes2hex(open(SHA.sha256, onnxfile))
         actual == sha || throw(BundleError(
-            "$file has sha256 $actual, but $path pins $sha for $target: it is not the model the card describes"))
-        (file, sha)
+            "$onnxfile has sha256 $actual, but $path pins $sha for $target: it is not the model the card describes"))
+        (onnxfile, sha)
     end
     onnx = NamedTuple{TARGETS}(map(first, pinned))
     sha256 = NamedTuple{TARGETS}(map(last, pinned))
@@ -216,7 +243,8 @@ function Model(dir::AbstractString = artifact"neuralbloch_fisp600_rank16")
     method = need(String, "derivatives", "method")
     method in DERIVATIVE_METHODS || throw(BundleError(
         "$path: [derivatives] method $(repr(method)) is not one of " * join(repr.(DERIVATIVE_METHODS), ", ")))
-    # A step, given exactly when the method is forward differences.
+    # A step is necessary for forward differences, and not permitted for the
+    # other method.
     function fdstep(key)
         method == "forward difference" && return positive(Float64, "derivatives", key)
         haskey(card["derivatives"], key) && throw(BundleError(
@@ -225,7 +253,7 @@ function Model(dir::AbstractString = artifact"neuralbloch_fisp600_rank16")
     end
     derivatives = (; method, dT1_step = fdstep("dT1_step"), dT2_step = fdstep("dT2_step"))
 
-    rf(key) = rftable(bundlefile(dir, path, "sequence", key, need(String, "sequence", key)), ntr)
+    rf(key) = rftable(file("sequence", key), ntr)
     sequence = (kind = need(String, "sequence", "kind"),
                 TR = need(Float64, "sequence", "TR"), TE = need(Float64, "sequence", "TE"),
                 TI = need(Float64, "sequence", "TI"), TW = need(Float64, "sequence", "TW"),
@@ -238,8 +266,8 @@ function Model(dir::AbstractString = artifact"neuralbloch_fisp600_rank16")
                 rf_angle = rf("rf_angle"), rf_phase = rf("rf_phase"))
     need(String, "provenance", "upstream")
     provenance = Dict{String,String}(k => string(v) for (k, v) in card["provenance"])
-    return Model(dir, family, version, ntr, rank, onnx, sha256, domain, constraint, derivatives, sequence,
-                 provenance)
+    return Model(dir, family, version, ntr, rank, onnx, sha256, sort!(files), domain, constraint, derivatives,
+                 sequence, provenance)
 end
 
 Base.show(io::IO, m::Model) =
@@ -248,13 +276,20 @@ Base.show(io::IO, m::Model) =
 """
     contract_problems(current::Model, new::Model) -> Vector{String}
 
-What keeps bundle `new` from replacing `current` as a later version of the
-same model family; empty when nothing does. Within a family, callers rely on
-the readouts, the rank, the sequence (RF tables included) and the domain
-constraint staying the same, on the training domain staying the same or
-growing, and on the version going up in semantic-version order
-(0.1.0-beta.1 < 0.1.0-beta.2 < 0.1.0 < 0.1.1). Two different families share
-no contract, so `new` of another family has no problems here.
+Return the problems that prevent bundle `new` from replacing `current` as a
+later version of the same model family. If there are no problems, the vector
+is empty.
+
+In a family, callers rely on these properties:
+
+- The readouts, the rank, the sequence (with the RF tables) and the domain
+  constraint stay the same.
+- The training domain stays the same or becomes larger.
+- The version increases in semantic-version order
+  (0.1.0-beta.1 < 0.1.0-beta.2 < 0.1.0 < 0.1.1).
+
+Two different families have no shared contract. Thus, if `new` is from a
+different family, the function returns no problems.
 """
 function contract_problems(current::Model, new::Model)
     current.family == new.family || return String[]

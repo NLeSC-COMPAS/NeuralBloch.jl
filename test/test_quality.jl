@@ -4,17 +4,18 @@ using Aqua
 using CUDACore: CUDACore
 
 @testset "Aqua" begin
-    # persistent_tasks is broken upstream, not here, on machines with a CUDA
-    # driver. There CUDA_Runtime_jll loads the wrapper of the toolkit that
-    # suits the driver, which loads CUDA_Compiler_jll, a dependency that
-    # CUDA_Runtime_jll ≥ 0.24 omits from its Project.toml (only the registry
-    # records it). Since 0.8.18 Aqua builds its precompile subprocess's
-    # manifest from each dependency's static Project.toml instead of
-    # resolving one, so the subprocess cannot load CUDACore. Without a driver
-    # (hosted CI runners) no wrapper loads and the check passes, so it is
-    # marked broken only where a wrapper loaded: is_available(). Where it is
-    # marked, `broken` keeps it running: the day upstream is fixed it reports
-    # an Unexpected Pass, and the marker can go.
+    # On machines with a CUDA driver, persistent_tasks is broken upstream, not
+    # here. On these machines, CUDA_Runtime_jll loads the wrapper of the
+    # toolkit for the driver. The wrapper loads CUDA_Compiler_jll, but
+    # CUDA_Runtime_jll ≥ 0.24 does not list this dependency in its
+    # Project.toml (only the registry has it). Since 0.8.18, Aqua makes the
+    # manifest of its precompile subprocess from the static Project.toml of
+    # each dependency, and does not resolve one. Thus, the subprocess cannot
+    # load CUDACore. Without a driver (hosted CI runners), no wrapper loads and
+    # the check passes. Thus, the marker applies only where a wrapper loaded:
+    # is_available(). With the marker, the check continues to run. When
+    # upstream corrects the problem, the check gives an Unexpected Pass. Then
+    # remove the marker.
     Aqua.test_all(NeuralBloch; persistent_tasks = (broken = CUDACore.CUDA_Runtime_jll.is_available(),))
 end
 

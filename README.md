@@ -7,13 +7,14 @@ with respect to T₁ and T₂, the signal alone, or the signal's coefficients in
 the network's low-rank basis. Each comes from its own TensorRT engine, which
 computes only that.
 
-The trained network comes as a model bundle: an ONNX file for each of these
-three predictions, the RF tables of the training sequence, and a card that
-describes them, all written by NeuralBloch's `export_bundle` and published as
-a NeuralBloch release. Pkg downloads the bundle when it installs the package.
-The model is `fisp600-rank16` version 0.1.0-beta.1, trained for T₁ from 0.1
-to 6 s, T₂ from 0.01 to 2 s with T₂ < T₁, and B₁ from 0.5 to 1.5. On your
-machine, the package does these steps automatically:
+The trained network comes as a model bundle. The bundle has an ONNX file for
+each of these three predictions, the RF tables of the training sequence, and
+a card that describes them. The `export_bundle` script of NeuralBloch writes
+the bundle, and NeuralBloch publishes it as a release. Pkg downloads the
+bundle when it installs the package. The model is `fisp600-rank16` version
+0.1.0-beta.1. Its training domain is T₁ from 0.1 to 6 s, T₂ from 0.01 to 2 s
+with T₂ < T₁, and B₁ from 0.5 to 1.5. On your machine, the package does these
+steps automatically:
 
 1. **Compile.** g++ compiles the C++ code of the package (`csrc/`) against
    your TensorRT. This occurs one time for each TensorRT version.
@@ -113,14 +114,14 @@ Pkg.add(url = "/path/to/NeuralBloch.jl")
 Pkg.add("CUDACore")
 ```
 
-`Pkg.add` also downloads the model, about 1.1 MB, from the NeuralBloch
-release
+`Pkg.add` also downloads the model (approximately 1.1 MB) from the
+NeuralBloch release
 [`model-fisp600-rank16-v0.1.0-beta.1`](https://github.com/NLeSC-COMPAS/NeuralBloch/releases/tag/model-fisp600-rank16-v0.1.0-beta.1),
 and checks it against the hashes in `Artifacts.toml`. After that, the package
-needs no network. If your GPU nodes have no internet access, run `Pkg.add`
-(or `Pkg.instantiate`) on a login node that shares the Julia depot. To use
-another model bundle, such as your own export, pass its directory:
-`Engine(Model("/path/to/bundle"))`.
+does not need the network. If your GPU nodes do not have internet access, run
+`Pkg.add` (or `Pkg.instantiate`) on a login node that shares the Julia depot.
+To use a different model bundle, for example your own export, give its
+directory: `Engine(Model("/path/to/bundle"))`.
 
 ## Quick start
 
@@ -166,10 +167,10 @@ Notes:
 - The signal and its derivatives are each a `CuMatrix{ComplexF32}`, indexed
   `[readout, voxel]`, at unit proton density. ∂T₁ and ∂T₂ are per second.
   They are not scaled.
-- The coefficients are a `CuMatrix{Float32}`, indexed `[coefficient, voxel]`:
-  the signal's coordinates in the network's rank-16 basis. The bundle does
-  not include the basis.
-- `predict!` computes what its outputs ask for: `(; signal, ∂T₁, ∂T₂)` in
+- The coefficients are a `CuMatrix{Float32}`, indexed `[coefficient, voxel]`.
+  They are the coordinates of the signal in the rank-16 basis of the network.
+  The bundle does not include the basis.
+- `predict!` calculates what its outputs ask for: `(; signal, ∂T₁, ∂T₂)` in
   any order, `(; signal)` or `(; coefficients)`.
 - The input can be any object with the properties `T₁`, `T₂` and `B₁`.
 - For more information about a function, use the Julia help, for example
@@ -177,15 +178,19 @@ Notes:
 
 ## Accuracy and speed
 
-Against the training-data generator (the FISP3D EPG simulation of
-BlochSimulators.jl, with exact forward-sensitivity derivatives), the
-normalized mean absolute error over the training domain is 1.21 % for the
-signal, 0.70 % for ∂T₁ and 1.15 % for ∂T₂.
+The reference is the simulation that made the training data: the FISP3D EPG
+simulation of BlochSimulators.jl, with exact forward-sensitivity derivatives.
+Against this reference, the normalized mean absolute error over the training
+domain is 1.21 % for the signal, 0.70 % for ∂T₁ and 1.15 % for ∂T₂.
 
-On an RTX 2080 Ti, for 14400 voxels, `predict!` takes 1.28 ms for the signal
-and its derivatives, 0.29 ms for the signal alone and 0.13 ms for the
-coefficients; for 40000 voxels, 3.5, 0.79 and 0.37 ms. To measure on your
-machine, use `scripts/validate.jl`.
+On an RTX 2080 Ti, `predict!` takes these times:
+
+| Voxels | Signal and derivatives | Signal | Coefficients |
+|---|---|---|---|
+| 14400 | 1.28 ms | 0.29 ms | 0.13 ms |
+| 40000 | 3.5 ms | 0.79 ms | 0.37 ms |
+
+To measure on your machine, use `scripts/validate.jl`.
 
 ## Development
 
@@ -198,32 +203,43 @@ julia --project -e 'using Pkg; Pkg.test()'
 The tests skip the parts that the machine cannot run, for example the GPU
 tests. Set `NEURALBLOCH_TEST_ALL=1` to make each skip a failure.
 
-A new model comes from NeuralBloch: `uv run run.py export_bundle` writes the
+A new model comes from NeuralBloch. `uv run run.py export_bundle` writes the
 bundle and its release file, `outputs/neuralbloch-model-<family>-v<version>.tar.gz`.
-Bind that file as this package's artifact for its family:
+Bind that file as the artifact of this package for its family:
 
 ```sh
 julia --project dev/bind_bundle.jl /path/to/NeuralBloch/outputs/neuralbloch-model-fisp600-rank16-v0.1.0-beta.2.tar.gz
 ```
 
-The script installs the file through Pkg from its local path, with the same
-unpacking and hash checks as after a download, and writes the family's entry
-in `Artifacts.toml`: the release URL, the file's sha256 and its tree hash. A
-later version of the same family must keep the family's contract: the same
-readouts, rank, sequence and RF tables, a training domain that is the same or
-wider, and a higher [semantic version](https://semver.org), for example
-0.1.0-beta.1, then 0.1.0-beta.2, then 0.1.0. Otherwise the script changes
-nothing and lists the differences. Within a family, PATCH counts re-exports
-of the same weights, MINOR new weights or a wider domain, and MAJOR stays 0
-until the family is stable. Then:
+The script installs the file with Pkg from its local path. Pkg unpacks the
+file and checks its hashes, as after a download. The script then writes the
+entry of the family in `Artifacts.toml`: the release URL, the sha256 of the
+file and its tree hash.
 
-1. Update what the tests and `scripts/validate.jl` pin: the card's values,
-   such as the version, hashes and domain (`test/test_model.jl`,
-   `test/test_predict.jl`), and the accuracy measured on the model
-   (`test/test_accuracy.jl`, the thresholds in `scripts/validate.jl`). Run
-   both.
-2. Publish the file, unchanged, as NeuralBloch's release
-   `model-<family>-v<version>` (see "Publish a model release" in
-   NeuralBloch's README).
-3. Push. Until the release exists, nobody can install a commit that binds
-   it, the CI included.
+A later version of the same family must keep the contract of the family:
+
+- the same readouts, rank, sequence and RF tables,
+- a training domain that is the same or larger,
+- a higher [semantic version](https://semver.org), for example 0.1.0-beta.1,
+  then 0.1.0-beta.2, then 0.1.0.
+
+If the new version does not keep the contract, the script changes nothing and
+lists the differences. In a family, the parts of the version have these
+meanings:
+
+- PATCH: a new export of the same weights.
+- MINOR: new weights or a larger domain.
+- MAJOR: 0 until the family is stable.
+
+Then do these steps:
+
+1. Update the values that the tests and `scripts/validate.jl` pin. These are
+   the values of the card, for example the version, the hashes and the domain
+   (`test/test_model.jl`, `test/test_predict.jl`), and the accuracy of the
+   model (`test/test_accuracy.jl`, the thresholds in `scripts/validate.jl`).
+   Run the tests and the script.
+2. Publish the file, without changes, as the NeuralBloch release
+   `model-<family>-v<version>` (see "Publish a model release" in the README
+   of NeuralBloch).
+3. Push the commits. Before the release exists, nobody can install a commit
+   that binds it. This also applies to the CI.

@@ -7,15 +7,16 @@
 # Conditions (plan.md): a fresh depot (a temporary JULIA_DEPOT_PATH);
 # installed with Pkg.add(url = …), i.e. from this repository's committed
 # HEAD, so neither uncommitted files nor sibling repositories can help; a
-# read-only package directory. Done when Engine() compiles and builds its
-# engines by itself and every target's predictions are correct: equal,
+# read-only package directory. The test passes when Engine() compiles and
+# builds its engines without help, and the predictions of each target are
+# correct. Correct means equal to the predictions of the development setup,
 # within the tolerance between two builds of the same ONNX (dev/NOTES.md,
-# D18), to what the development setup predicts, which scripts/validate.jl
-# checks against EPG.
+# D18). scripts/validate.jl checks the development setup against EPG.
 #
-# The model bundle is the artifact Artifacts.toml binds: Pkg.add downloads it
-# from NeuralBloch's release into the fresh depot and checks both its hashes.
-# Until that release exists, the install fails; run this after publishing it.
+# The model bundle is the artifact that Artifacts.toml binds. Pkg.add
+# downloads it from the NeuralBloch release into the new depot and checks its
+# two hashes. If the release does not exist, the installation fails. Thus, run
+# this script after you publish the release.
 #
 # Everything lands in a temporary directory under tempdir(), removed at the
 # end. The exit code is 1 if a check fails.
@@ -61,7 +62,7 @@ check("functional", NeuralBloch.functional())
 engine = Engine()                               # first use: compile, build, cache
 println(engine)
 v, expected = deserialize(reference)
-for (target, ref) in pairs(expected)              # every target: every ONNX model was installed
+for (target, ref) in pairs(expected)              # all targets: Pkg installed all ONNX models
     out = predict(engine, map(CuArray, v); target)
     synchronize()
     worst = maximum(k -> maximum(abs, Array(out[k]) .- ref[k]) / maximum(abs, ref[k]), keys(ref))

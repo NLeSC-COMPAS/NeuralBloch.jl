@@ -1,7 +1,7 @@
 # predict.jl: Engine, outputs, predict!, predict, checkdomain and the
-# metadata queries. The T2 testsets follow the plan's predict! checklist, for
-# each target: the signal and its derivatives, the signal alone, and the
-# signal's basis coefficients, each from its own engine.
+# metadata queries. The T2 testsets follow the predict! checklist of the plan,
+# for each target: the signal and its derivatives, the signal alone, and the
+# basis coefficients of the signal. Each target has its own engine.
 
 using NeuralBloch: Engine, Model, outputs, predict!, predict, checkdomain, ntr, rank, domain, batchprofile,
                    sequence, TARGETS
@@ -27,7 +27,7 @@ sentinel(dims::Integer...) = sentinel(ComplexF32, dims...)
 untouched(A) = (synchronize(); all(isnan, Array(A)))
 relative(a, b) = maximum(abs, Array(a) .- Array(b)) / maximum(abs, Array(b))
 
-# Each target's output names, element type and rows.
+# The output names, the element type and the rows of each target.
 const SETS = (signal_and_derivatives = ((:signal, :∂T₁, :∂T₂), ComplexF32, 600),
               signal = ((:signal,), ComplexF32, 600),
               coefficients = ((:coefficients,), Float32, 16))
@@ -139,21 +139,22 @@ tier(:T2, "predict: the signal alone, from its own engine") do
     full = predict(e, p)
     s = predict(e, p; target = :signal)
     synchronize()
-    # Another engine, so the bound between builds (D18); bitwise on the
-    # RTX 2080 Ti with TensorRT 11.2, whose kernels are the same.
+    # A different engine, thus the bound between builds applies (D18). On the
+    # RTX 2080 Ti with TensorRT 11.2, the kernels are the same and the results
+    # are bitwise equal.
     @test relative(s.signal, full.signal) ≤ 5e-6
-    # A smaller batch after a larger one; the first 10 voxels are the same
-    # ones, and results do not depend on the batch (dev/NOTES.md, S6 ③b).
+    # A smaller batch after a larger batch. The first 10 voxels are the same,
+    # and the results do not change with the batch (dev/NOTES.md, S6 ③b).
     small = predict(e, voxels(10; seed = 3); target = :signal)
     synchronize()
     @test Array(small.signal) == Array(s.signal)[:, 1:10]
 end
 
 tier(:T2, "predict: the coefficients are the signal's, in a rank-16 basis") do
-    # The bundle does not ship the basis, but the signal must be one linear
-    # map of the coefficients: fitting that map by least squares on many
-    # voxels reproduces the signal to float precision only if both engines
-    # are the same network.
+    # The bundle does not include the basis, but the signal must be one linear
+    # map of the coefficients. A least-squares fit of that map on many voxels
+    # gives the signal to float precision only if the two engines are the same
+    # network.
     e, N = engine(), 2000
     p = voxels(N; seed = 9)
     C = Float64.(Array(predict(e, p; target = :coefficients).coefficients))
@@ -161,7 +162,7 @@ tier(:T2, "predict: the coefficients are the signal's, in a rank-16 basis") do
     @test size(C) == (16, N)
     U = S / C                                                   # (600, 16), least squares
     @test norm(S - U * C) / norm(S) ≤ 1e-5
-    # Coefficients of other voxels: the same map, fitted on the first set
+    # The coefficients of other voxels: the same map, from the fit on the first set
     q = voxels(500; seed = 10)
     Cq = Float64.(Array(predict(e, q; target = :coefficients).coefficients))
     Sq = ComplexF64.(Array(predict(e, q; target = :signal).signal))
@@ -288,8 +289,9 @@ end
 tier(:T2, "predict: two tasks share one engine") do
     e, N = engine(), 20000
     pA, pB = voxels(N; seed = 1), voxels(N; seed = 2)
-    # Each pair: the target each task asks for. The same target makes the two
-    # tasks share one engine's buffers; different targets, the engine object.
+    # Each pair gives the target of each task. With the same target, the two
+    # tasks share the buffers of one engine. With different targets, they
+    # share only the Engine object.
     for (targetA, targetB) in ((:signal_and_derivatives, :signal_and_derivatives), (:signal_and_derivatives, :signal),
                                (:coefficients, :signal))
         refA, refB = predict(e, pA; target = targetA), predict(e, pB; target = targetB)

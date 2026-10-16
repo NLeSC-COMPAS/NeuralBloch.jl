@@ -5,12 +5,12 @@
 # Three targets (plan.md, "Definition of done"), each reported PASS or FAIL;
 # the exit code is 1 if any fails:
 #
-#   accuracy  NMAE against ground truth, i.e. BlochSimulators' FISP3D EPG
-#             simulation (the generator of the training data) with the
-#             derivative method the model card states, on the training
-#             sequence as the card describes it. The evaluation set covers
-#             the card's training domain (14400 points, seed 20260826).
-#   memory    200 consecutive predict! calls per target (signal and
+#   accuracy  NMAE against the ground truth: the FISP3D EPG simulation of
+#             BlochSimulators (the simulation that made the training data),
+#             with the derivative method and the training sequence of the
+#             model card. The evaluation set is in the training domain of
+#             the card (14400 points, seed 20260826).
+#   memory    200 sequential predict! calls for each target (signal and
 #             derivatives, signal, coefficients): no host or GPU allocation,
 #             no GC.
 #   speed     on par with MRSTAT.jl's engine: 1.30 ms for 14400 voxels
@@ -26,11 +26,11 @@ using Printf, Statistics
 
 include("reference.jl")
 
-# NMAE thresholds per output: 1.05 × what this set measured for
-# fisp600-rank16 v1 on 2026-10-15, and again for 0.1.0-beta.1, the same
-# network, rounded up (dev/NOTES.md). A different
-# build of the same ONNX moves NMAE in the sixth digit; a real regression
-# moves the second.
+# The NMAE threshold for each output: 1.05 × the value that this set measured,
+# rounded up (dev/NOTES.md). The values are for fisp600-rank16 v1 on
+# 2026-10-15, and the same for 0.1.0-beta.1, which is the same network. A
+# different build of the same ONNX changes the sixth digit of the NMAE. A real
+# regression changes the second digit.
 const THRESHOLDS = (signal = 0.0128, ∂T₁ = 0.0074, ∂T₂ = 0.0121)
 const LATENCY_TARGET_MS = 1.30 * 1.10                          # at 14400 voxels
 
@@ -108,7 +108,7 @@ appendix_a = Dict(10000 => 1.03, 14400 => 1.30, 40000 => 3.43)
 for n in (1000, 10000, 14400, 40000)
     q = gpu_voxels(evaluation_set(model, n; seed = n))
     outs = NamedTuple{TARGETS}(map(target -> outputs(engine, n; target), TARGETS))
-    ms = map(out -> latency(() -> predict!(out, engine, q)), outs)      # the first three columns, in order
+    ms = map(out -> latency(() -> predict!(out, engine, q)), outs)      # columns 2 to 4, in order
     full = outs.signal_and_derivatives
     submit = host_submission(() -> predict!(full, engine, q))
     predict!(full, engine, q)                                  # binds this batch; then the run alone

@@ -8,11 +8,11 @@
 #
 # Reads ../MRSTAT.jl/models/model.engine and writes nothing. MRSTAT's engine
 # runs through this package's own TensorRT layer: libnb-trtinfer.so opens any
-# engine of the installed TensorRT version. The comparison means something
-# only when both engines come from the same model: since the fisp600-rank16
-# bundle, rebuild upstream's engine and re-run MRSTAT's bootstrap.sh first.
-# The evaluation set now follows the card's domain, so it is MRSTAT's set
-# only on the previous card's domain.
+# engine of the installed TensorRT version. The comparison is correct only if
+# the two engines come from the same model. Since the fisp600-rank16 bundle,
+# first build the upstream engine again and run the bootstrap.sh of MRSTAT
+# again. The evaluation set uses the domain of the card. Thus, it is the set
+# of MRSTAT only on the domain of the previous card.
 
 using NeuralBloch
 using NeuralBloch: TensorRT, resolve_io
