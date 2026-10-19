@@ -42,11 +42,13 @@ function epg(model::Model, v)
     d = model.derivatives
     if d.method == "forward sensitivity"
         echos, ∂ = simulate_derivatives_forward_sensitivity((:T₁, :T₂), seq, parameters)
-    else                                                        # forward difference: the only other method that Model accepts
+    elseif d.method == "forward difference"
         echos = simulate_magnetization(CUDALibs(), seq, parameters)
         steps = BlochSimulators.T₁T₂B₁B₀(d.dT1_step, d.dT2_step, BlochSimulators.DEFAULT_ΔB₁,
                                          BlochSimulators.DEFAULT_ΔB₀)
         ∂ = simulate_derivatives_finite_difference((:T₁, :T₂), echos, seq, parameters, steps)
+    else
+        error("epg does not know the derivative method $(repr(d.method)) of the card")
     end
     return (signal = echos, ∂T₁ = ∂.T₁, ∂T₂ = ∂.T₂)
 end

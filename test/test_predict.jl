@@ -79,6 +79,15 @@ tier(:T0, "predict: model metadata and checkdomain") do
     @test checkdomain(m, (; B₁ = [1, 1])) isa NamedTuple
     err = @test_throws ArgumentError checkdomain(m, (; B₁ = [1, 2]))
     @test occursin("p.B₁ ranges over [1, 2]", sprint(showerror, err.value))
+
+    # Vectors of different lengths: a broadcast would accept a T₂ of length 1
+    err = @test_throws ArgumentError checkdomain(m, (; p.T₁, T₂ = p.T₂[1:1]))
+    @test occursin("p.T₁ and p.T₂ have lengths 100 and 1; they must be equal", sprint(showerror, err.value))
+
+    # A constraint that checkdomain does not know is an error, not a pass
+    other = Model((name === :constraint ? "T1 < T2" : getfield(m, name) for name in fieldnames(Model))...)
+    err = @test_throws ErrorException checkdomain(other, p)
+    @test occursin("does not check the domain constraint \"T1 < T2\"", sprint(showerror, err.value))
 end
 
 tier(:T0, "predict: Engine refuses bad settings before it looks at the system") do

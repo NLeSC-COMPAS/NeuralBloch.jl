@@ -77,8 +77,14 @@ function Engine(model::Model = Model(); batch = (1, 14400, 40000), tf32::Bool = 
         end
         ios = map((target, h) -> resolve_io(TensorRT.tensors(h), target; model.ntr, model.rank), TARGETS, handles)
         # One `settings` built all the engines (and is part of their cache key),
-        # thus they have one profile.
-        lo, opt, hi = (shape[1] for shape in TensorRT.tensors(first(handles))[first(ios).x+1].profile)
+        # thus each engine must have its batch profile.
+        for (target, path, h, io) in zip(TARGETS, paths, handles, ios)
+            profile = Tuple(shape[1] for shape in TensorRT.tensors(h)[io.x+1].profile)
+            profile == settings.batch || throw(TensorRT.BuildError(
+                "the cached $target engine $path has the batch profile $profile, not $(settings.batch); " *
+                "the cache is not correct: remove $(dirname(path)) and call Engine again"))
+        end
+        lo, opt, hi = settings.batch
         targets = NamedTuple{TARGETS}(map((h, io) -> Target(h, io, CuMatrix{Float32}(undef, 3, hi)), handles, ios))
         return Engine(model, targets, (min = lo, opt, max = hi), sys.gpu.name, ReentrantLock())
     catch
@@ -297,8 +303,8 @@ stage_row!(input, row, v, N, stream) =
 
 Throw an `ArgumentError` if a voxel of `p` is not in the training domain
 ([`domain`](@ref)). Each of `p.T₁`, `p.T₂` and `p.B₁` that `p` has must be in
-its range (NaN is not in the range). If `p` has T₁ and T₂, T₂ < T₁ must be
-true. Outside the domain, the network extrapolates. If `p` has no voxels
+its range (NaN is not in the range), and they must have the same length. If
+`p` has T₁ and T₂, T₂ < T₁ must be true. Outside the domain, the network extrapolates. If `p` has no voxels
 (empty vectors), no voxel is outside the domain.
 
 `p` can hold GPU or CPU vectors. For GPU vectors, the function copies
@@ -308,6 +314,10 @@ reductions to the host, thus it synchronizes. For this reason,
 function checkdomain(model::Model, p)
     present = filter(name -> hasproperty(p, name), FEATURES)
     isempty(present) && throw(ArgumentError("p has none of the properties T₁, T₂, B₁ that checkdomain checks"))
+    lengths = map(name -> length(getproperty(p, name)), present)
+    allequal(lengths) || throw(ArgumentError(
+        "$(join(("p.$name" for name in present), ", ", " and ")) have lengths $(join(lengths, ", ", " and ")); " *
+        "they must be equal"))
     for name in present
         v = getproperty(p, name)
         isempty(v) && continue                   # extrema throws for an empty CPU vector
@@ -317,10 +327,14 @@ function checkdomain(model::Model, p)
         throw(ArgumentError("p.$name ranges over [$vmin, $vmax], outside the training domain [$lo, $hi]; " *
                             "the network extrapolates there"))
     end
-    if model.constraint == "T2 < T1" && hasproperty(p, :T₁) && hasproperty(p, :T₂)
-        n = count(p.T₂ .>= p.T₁)
-        n == 0 || throw(ArgumentError(
-            "$n voxels have T₂ ≥ T₁, outside the training domain (T₂ < T₁ only); the network extrapolates there"))
+    if model.constraint == "T2 < T1"
+        if hasproperty(p, :T₁) && hasproperty(p, :T₂)
+            n = count(p.T₂ .>= p.T₁)
+            n == 0 || throw(ArgumentError(
+                "$n voxels have T₂ ≥ T₁, outside the training domain (T₂ < T₁ only); the network extrapolates there"))
+        end
+    else                                         # Model accepts only the constraints in CONSTRAINTS
+        error("checkdomain does not check the domain constraint $(repr(model.constraint))")
     end
     return p
 end
