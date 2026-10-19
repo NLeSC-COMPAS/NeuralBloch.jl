@@ -11,9 +11,10 @@ using ComputationalResources: CUDALibs
 using CUDACore: CuArray
 using Random: Xoshiro
 
-# A set of voxels in the training domain of the card. The sampling is the same
-# as upstream: T₁ and T₂ log-uniform, B₁ uniform. T₂ is not more than 0.8 T₁,
-# because the domain has T₂ < T₁. The values are Float64, as the reference
+# A set of voxels in the training domain of the card. T₁ and T₂ are
+# log-uniform and B₁ is uniform, as upstream. Upstream drops the voxels with
+# T₂ ≥ T₁. This set instead limits T₂ to 0.8 T₁, as the evaluation set of
+# MRSTAT.jl does: T₂ < T₁ in the domain. The values are Float64, as the reference
 # uses. Xoshiro(seed) gives the same values as Random.seed!(seed). Thus, on the
 # domain of the 2026-10-01 card (T₁ 0.1–5 s, B₁ 0.8–1.2), the default set is
 # the evaluation set of MRSTAT.jl (scripts/validate_tensorrt.jl).

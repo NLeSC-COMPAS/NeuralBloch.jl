@@ -419,7 +419,9 @@ Documented, not changed:
 
 ## The fisp600-rank16 v1 bundle (2026-10-15)
 
-`models/` now holds a bundle that NeuralBloch's `export_bundle` wrote
+(Superseded on the same day: the bundle is an artifact now, see
+"fisp600-rank16 0.1.0-beta.1 as an artifact".) `models/` then held a bundle
+that NeuralBloch's `export_bundle` wrote
 (commit `d5c2884`), copied unchanged: an ONNX model per target
 (`signal_and_derivatives`, `signal`, `coefficients`), the RF tables, and a
 generated card in format 2. The checkpoint is upstream's `outputs/model.pt`
@@ -522,8 +524,9 @@ so the suite and `scripts/validate.jl` ran against the artifact as users will
 get it: 813 tests passed (1 broken, the Aqua marker), and the accuracy is
 v1's to every printed digit, 1.2141 / 0.7043 / 1.1466 % on `validate.jl`'s
 set and 1.1837 / 0.6952 / 1.1449 % on the T3 set. `scripts/distribution.jl`
-downloads the artifact from the release, so it can run only once the release
-exists.
+downloads the artifact from the release, so it could run only once the
+release existed. The release was published on 2026-10-19, and commit
+`d316235` binds it.
 
 ## Golden values in place of the T3 test (2026-10-19)
 
@@ -584,6 +587,6 @@ table recommends an option, implementation follows that recommendation.
 | D21 | Targets | One TensorRT engine per target (signal and derivatives, signal, coefficients), in one `Engine`; the keys of `out` choose it; `outputs`/`predict` take `target` | three-engine plan |
 | D22 | Input buffers | One `(3, max)` buffer per target: `claim!` orders the runs of one handle only, so a shared buffer could be overwritten by another target's run on another stream | three-engine plan |
 | D23 | Bundle updates | ~~`dev/update_bundle.jl` installs a bundle into `models/`~~ `dev/bind_bundle.jl` binds a release file (D24); within a family, `contract_problems` (in the package, so the suite tests it) requires the same readouts, rank, sequence, RF tables and constraint, a domain the same or wider, and a higher version. Field by field, not a stored hash: it names what differs, and a wider domain is allowed | three-engine plan |
-| D24 | Bundle delivery | A non-lazy Pkg artifact per family, `neuralbloch_<family>` in `Artifacts.toml`, downloaded with the package from NeuralBloch's release `model-<family>-v<version>`, whose one file is the bundle's reproducible tarball; `Model()` reads `neuralbloch_fisp600_rank16`. `dev/bind_bundle.jl` binds a local release file before it is published, installing it through Pkg's own unpacking and checks of both hashes. Model releases are pre-releases or not marked latest; a published file is never replaced, so a fix is a new version | three-engine plan, phase 2 |
+| D24 | Bundle delivery | A non-lazy Pkg artifact per family, `neuralbloch_<family>` in `Artifacts.toml`, downloaded with the package from NeuralBloch's release `model-<family>-v<version>`, whose one file is the bundle's reproducible tarball; `Model()` reads `neuralbloch_fisp600_rank16`. `dev/bind_bundle.jl` binds a local release file before it is published, installing it through Pkg's own unpacking and checks of both hashes (when the depot does not have the tree yet; for a tree that is bound, the entry must name the same file). Model releases are pre-releases or not marked latest; a published file is never replaced, so a fix is a new version | three-engine plan, phase 2 |
 | D25 | Model and card versions | The model's version is a semantic version without build metadata, e.g. `0.1.0-beta.1`: PATCH re-exports the same weights, MINOR brings new weights or a wider domain, MAJOR stays 0 until the family is stable. Only the order is enforced: `VersionNumber`, after the strict pattern. The card versions itself separately: `model_card.toml` (formerly `card.toml`) starts with `schema_version = "1.0"`, "MAJOR.MINOR", replacing the integer `format` (1 to 3, never published). A newer MINOR only adds fields, which `Model` ignores; another MAJOR is refused | user decisions, 2026-10-15 and 2026-10-16 |
 | D26 | Accuracy in the suite | Golden EPG values for 8 voxels (`test/golden.toml`, T2, bound 2 × the NMAE that `scripts/golden.jl` measured), keyed by family and version; the EPG comparison on a large set is `scripts/validate.jl` only. BlochSimulators is not in the test environment | review of the three-engine branch, 2026-10-19 |

@@ -1,18 +1,20 @@
-# One-time comparison (task 10, 2026-10-01): this package's engine against
-# MRSTAT.jl's existing one (models/model.engine, built upstream from the same
-# ONNX with upstream's settings), on MRSTAT's evaluation set, and both
-# against EPG. The result is recorded in dev/NOTES.md; it is deliberately not
-# a test, since it needs a sibling checkout.
+# A comparison that ran one time (task 10, 2026-10-01): the engine of this
+# package against the engine of MRSTAT.jl (models/model.engine), and both
+# against EPG. On that date, both engines came from the same ONNX, and the
+# voxels were the evaluation set of MRSTAT. dev/NOTES.md records the result.
+# It is not a test, because it needs a checkout of MRSTAT.jl next to this one.
 #
 #     julia --project=scripts dev/compare_mrstat.jl
 #
-# Reads ../MRSTAT.jl/models/model.engine and writes nothing. MRSTAT's engine
-# runs through this package's own TensorRT layer: libnb-trtinfer.so opens any
-# engine of the installed TensorRT version. The comparison is correct only if
-# the two engines come from the same model. Since the fisp600-rank16 bundle,
-# first build the upstream engine again and run the bootstrap.sh of MRSTAT
-# again. The evaluation set uses the domain of the card. Thus, it is the set
-# of MRSTAT only on the domain of the previous card.
+# The script reads ../MRSTAT.jl/models/model.engine and writes nothing. The
+# engine of MRSTAT runs through the TensorRT layer of this package:
+# libnb-trtinfer.so opens each engine of the installed TensorRT version.
+#
+# Since the fisp600-rank16 bundle, the two engines do not come from the same
+# model, and the comparison is not correct. Before you run it again, build the
+# upstream engine again and run the bootstrap.sh of MRSTAT again. The
+# evaluation set now uses the domain of the card. Thus, it is the set of
+# MRSTAT only for the domain of the 2026-10-01 card.
 
 using NeuralBloch
 using NeuralBloch: TensorRT, resolve_io

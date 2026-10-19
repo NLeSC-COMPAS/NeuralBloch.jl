@@ -33,11 +33,13 @@ for each target, ready for [`predict!`](@ref). The targets are the signal and
 its derivatives, the signal alone, and the basis coefficients of the signal.
 Each engine calculates only what its target needs.
 
-The first time on a machine, and after a change of TensorRT, GPU or settings,
-`Engine` compiles the C++ code of NeuralBloch against the system TensorRT. It
-then builds the three engines in subprocesses, in some seconds each, and
-tells you. The cache keeps all of them, and later calls load them from the
-cache.
+The first time on a machine, `Engine` compiles the C++ code of NeuralBloch
+against the system TensorRT. Then it builds the three engines in
+subprocesses, in some seconds each. It tells you when it does these steps.
+The cache keeps the compiled code and the engines, and later calls load them
+from the cache. `Engine` compiles again after a change of TensorRT, g++ or
+the C++ code. It builds again after a change of the GPU model, the settings,
+the ONNX models or the compiled code.
 
 - `batch = (min, opt, max)`: the batch sizes that the engines accept, and the
   size that they are tuned for. The execution context of each engine holds GPU
@@ -49,9 +51,10 @@ cache.
   because accuracy is more important.
 
 `Engine` throws a `PrerequisiteError` if the system does not have a necessary
-item (see [`NeuralBloch.versioninfo`](@ref)), a `BuildError` if a build
-fails, and a [`BundleError`](@ref) if an engine does not agree with the model
-card. `close` releases the GPU memory of the engines. If you do not call it,
+item (see [`NeuralBloch.versioninfo`](@ref)), a `CompileError` if g++ fails,
+a `BuildError` if a build fails, a `TensorRTError` if TensorRT cannot open
+an engine, and a [`BundleError`](@ref) if an engine does not agree with the
+model card. `close` releases the GPU memory of the engines. If you do not call it,
 the garbage collector releases the memory.
 """
 mutable struct Engine
@@ -159,8 +162,9 @@ batchprofile(e::Engine) = e.batch
 """
     sequence(model_or_engine) -> NamedTuple
 
-The FISP3D sequence of the simulation that made the training data: TR, TE,
-TI, TW (seconds), max_state, repetitions, inversion_prepulse, wait_spoiling,
+The FISP3D sequence of the simulation that made the training data: kind (the
+name of the sequence, "FISP3D"), TR, TE, TI, TW (seconds), max_state,
+repetitions, inversion_prepulse, wait_spoiling,
 undersampling_factor, delta_k_spoil (rad/m), and the RF train as rf_angle and
 rf_phase (degrees, one value for each readout).
 """
@@ -216,9 +220,10 @@ engine, which calculates only that set.
 `predict!` is asynchronous. It puts all the work in the queue of the stream of
 the calling task, and does not wait for the GPU. The results are ready in
 stream order. Thus, it does not check the training domain (see
-[`checkdomain`](@ref)). One exception: if the previous call for the same
-output set came from a different task, this call first waits for the stream of
-that task, because the buffers of that engine go to a different task. Keep
+[`checkdomain`](@ref)). If the previous call for the same output set came
+from a different task, the work of this call starts on the GPU only after the
+work on the stream of that task, because the buffers of that engine go to a
+different task. The call itself does not wait for this. Keep
 `out` and `p` until you use the results. Each violation of the contract
 causes an `ArgumentError` before the function puts work in the queue. After
 the warm-up, `predict!` does not allocate memory on the host or on the GPU.

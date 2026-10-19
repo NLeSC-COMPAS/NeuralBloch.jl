@@ -188,7 +188,7 @@ On an RTX 2080 Ti, `predict!` takes these times:
 | Voxels | Signal and derivatives | Signal | Coefficients |
 |---|---|---|---|
 | 14400 | 1.28 ms | 0.29 ms | 0.13 ms |
-| 40000 | 3.5 ms | 0.79 ms | 0.37 ms |
+| 40000 | 3.47 ms | 0.79 ms | 0.37 ms |
 
 To measure on your machine, use `scripts/validate.jl`.
 
@@ -253,8 +253,9 @@ To adopt a new model, do these steps:
    upload the file, make sure that its sha256 is the same as the sha256 in
    `Artifacts.toml`.
 
-   CAUTION: Do not run `export_bundle` again after step 2. A new export writes
-   a different file.
+   CAUTION: Do not run `export_bundle` again after step 2. A new export can
+   write a different file, for example because the card records the commit
+   of NeuralBloch.
 
 6. Push the commits after the release is available. Before that time, users
    and the CI cannot install a commit that binds the file.
@@ -264,7 +265,7 @@ To adopt a new model, do these steps:
 A family is a contract for callers. A new version of a family must obey these
 rules:
 
-- The readouts, rank, sequence and RF tables do not change.
+- The readouts, rank, sequence, RF tables and domain constraint do not change.
 - The training domain is the same or larger.
 - The [semantic version](https://semver.org) is higher, for example
   0.1.0-beta.1, then 0.1.0-beta.2, then 0.1.0.
@@ -295,11 +296,12 @@ version.
 `Artifacts.toml` binds. This rule protects the published versions. To replace
 the file of a version that is not published, do these steps:
 
-1. Bind the new file into an empty file:
+1. Bind the new file into an empty file. Keep the name of the release file:
+   the script refuses a file with a different name.
 
    ```sh
    rm -f /tmp/Artifacts.toml
-   julia --project dev/bind_bundle.jl /path/to/the-new-file.tar.gz /tmp/Artifacts.toml
+   julia --project dev/bind_bundle.jl /path/to/neuralbloch-model-<family>-v<version>.tar.gz /tmp/Artifacts.toml
    ```
 
 2. In `Artifacts.toml`, replace the entry of the family with the entry from

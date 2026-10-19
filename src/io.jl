@@ -19,15 +19,17 @@
 # coefficients has coefficients.
 #
 # The engine file records its tensors (names, dtypes, shapes), but not the
-# model that they come from. `resolve_io` compares the tensors with the
-# contract one time, when it builds an Engine, and returns the location of each
-# tensor.
+# model that they come from. `Engine` calls `resolve_io` one time for each
+# target, when it opens the engine. `resolve_io` compares the tensors with the
+# contract and returns the location of each tensor.
 #
 # The reason for Float32 and these shapes: the row-major (batch, 3) of TensorRT
 # is the column-major (3, batch) of Julia. A row-major (batch, NTR, 2) Float32
 # tensor has the same bytes as a column-major (NTR, batch) ComplexF32 matrix. A
 # row-major (batch, rank) tensor has the same bytes as a column-major (rank,
-# batch) Float32 matrix. Thus, the inputs and outputs go across without copies.
+# batch) Float32 matrix. Thus, the outputs go across without copies. The input
+# x is a (3, max) buffer of the engine: `stage!` fills it with three strided
+# copies of p.T₁, p.T₂ and p.B₁.
 
 const NAMES = ("T1" => :T₁, "T2" => :T₂, "B1" => :B₁, "signal" => :signal, "dT1" => :∂T₁, "dT2" => :∂T₂,
                "coefficients" => :coefficients)
@@ -168,10 +170,10 @@ end
 """
     alignment(rows, T) -> Int
 
-The number of voxels in one 256-byte step of a `CuMatrix{T}` with `rows`
-rows and one voxel in each column. If `j - 1` is a multiple of this number, a
-column view `A[:, j:k]` starts at a 256-byte alignment, as TensorRT requires
-(dev/NOTES.md, S6).
+The smallest number of columns of a `CuMatrix{T}` with `rows` rows (one
+voxel in each column) whose size is a multiple of 256 bytes. If `j - 1` is a
+multiple of this number, a column view `A[:, j:k]` starts at a 256-byte
+alignment, as TensorRT requires (dev/NOTES.md, S6).
 """
 alignment(rows::Integer, ::Type{T}) where {T} = 256 ÷ gcd(256, rows * sizeof(T))
 
@@ -247,9 +249,10 @@ const OUTPUT_SETS = "(; signal, ∂T₁, ∂T₂) in any order, (; signal) or (;
 
 The target whose engine calculates the output set `out`: the signal and its
 derivatives (in any order), the signal alone, or the coefficients. If `out` is
-not one of these sets, the function throws an `ArgumentError`. The type of
-`out` gives the result. Thus, `predict!` knows its target, engine and layout
-at compile time.
+not one of these sets, the function throws an `ArgumentError`. The keys of
+`out`, which are part of its type, give the result. Thus, Julia can calculate
+the target, the engine and the layout of a `predict!` call at compile time
+(the test "no allocations after warm-up" shows it).
 """
 targetof(::NamedTuple{(:signal,)}) = :signal
 targetof(::NamedTuple{(:coefficients,)}) = :coefficients
@@ -290,7 +293,8 @@ function checkoutputs(out::NamedTuple, N::Integer, rows::Integer, ::Type{E}) whe
         problem = layout_problem(size(A), address(A), rows, N, E)
         problem === nothing || throw(ArgumentError("out.$name is $problem"))
     end
-    # A new name: an assignment to a variable of the closure above boxes it.
+    # Use a new name. If this line assigned `problem`, the closure above would
+    # capture a variable that changes, and Julia would box it.
     overlap = overlap_problem(keys(out), map(address, values(out)), rows * N * sizeof(E))
     overlap === nothing || throw(ArgumentError(overlap))
     return nothing

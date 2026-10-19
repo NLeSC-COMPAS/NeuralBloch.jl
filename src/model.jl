@@ -11,8 +11,10 @@
 
 The model bundle is not complete or not consistent. Possible causes: a field
 of the card is missing or incorrect, a file that the card names is missing, or
-an ONNX model is not the model that the card pins. The message gives the file
-to correct.
+an ONNX model is not the model that the card pins. [`Model`](@ref) throws it
+for the card and its files. [`Engine`](@ref) throws it if the inputs or
+outputs of an engine do not agree with the card. The message gives the file
+or the target to correct.
 """
 struct BundleError <: Exception
     msg::String
@@ -48,9 +50,11 @@ const CONSTRAINTS = ("T2 < T1",)
 # The methods that can calculate the derivatives of the training targets.
 const DERIVATIVE_METHODS = ("forward sensitivity", "forward difference")
 
-# The name of a family is <sequence><ntr>-rank<rank>, with an optional
-# qualifier: lowercase words with hyphens between them. Exactly one word is
-# rank<N>.
+# The name of a family: lowercase words (letters and digits) with hyphens
+# between them. Exactly one word is rank<N>, and N must be the rank of the
+# card. Model checks only these rules. By convention, the name is
+# <sequence><ntr>-rank<rank>, with an optional qualifier, but Model does not
+# compare <ntr> with the ntr of the card.
 const FAMILY_PATTERN = r"\A[a-z0-9]+(-[a-z0-9]+)*\z"
 
 # A version is a semantic version without build metadata: MAJOR.MINOR.PATCH,
@@ -88,7 +92,7 @@ bundles, for example your own export, from their directory.
 
 If a check fails, `Model` throws a [`BundleError`](@ref).
 
-The fields contain the card:
+The fields of a `Model` hold the data of the card:
 
 - `family` and `version`: the name of the model. A family is for example
   `fisp600-rank16`. A version is a semantic version, for example
@@ -234,7 +238,7 @@ function Model(dir::AbstractString = artifact"neuralbloch_fisp600_rank16")
     stated = familyrank(family)
     stated === nothing && throw(BundleError(
         "$path: [model] family $(repr(family)) must be lowercase words joined by hyphens, exactly one " *
-        "of them rank<N>: <sequence><ntr>-rank<rank>, e.g. fisp600-rank16"))
+        "of them rank<N>, e.g. fisp600-rank16"))
     stated == rank || throw(BundleError(
         "$path: [model] family $(repr(family)) states rank $stated, but [model] rank is $rank"))
 
