@@ -3,13 +3,15 @@
 #
 #     julia --project dev/bind_bundle.jl TARBALL [ARTIFACTS_TOML]
 #
-# TARBALL is outputs/neuralbloch-model-<family>-v<version>.tar.gz of
-# NeuralBloch. Attach this exact file to the NeuralBloch release
-# model-<family>-v<version>. The default ARTIFACTS_TOML is the Artifacts.toml
-# of this package. The script does not download or publish. Pkg installs the
-# file from its local path. Pkg unpacks the file and checks its two hashes, as
-# it does after it downloads the release. Thus, the test of the entry occurs
-# before the release exists.
+# TARBALL is the release file neuralbloch-model-<family>-v<version>.tar.gz:
+# the file that you download from the NeuralBloch release
+# model-<family>-v<version>, or, before the release exists, the file in
+# outputs/ of NeuralBloch. In that case, attach this exact file to the
+# release. The default ARTIFACTS_TOML is the Artifacts.toml of this package.
+# The script does not publish. If the depot does not have the contents of the
+# file, Pkg installs the file from its local path: it unpacks the file and
+# checks its two hashes, as it does after it downloads the release. Thus, the
+# test of the entry occurs before the release exists.
 #
 # Requirements for the file:
 #
@@ -21,9 +23,13 @@
 #   readouts, rank, sequence and RF tables, a training domain that is the same
 #   or larger, and a higher version.
 #
-# If a requirement is not satisfied, the script changes nothing, lists the
-# problems and exits with code 1. If the file is already bound, the script
-# changes nothing and exits with code 0. A different family gets a new entry.
+# If a requirement is not satisfied, the script does not change
+# ARTIFACTS_TOML, lists the problems and exits with code 1. If ARTIFACTS_TOML
+# binds this file (the same contents, sha256 and URL), the script changes
+# nothing and exits with code 0. If it binds the same contents from a
+# different file, for example the same bundle compressed again, the script
+# refuses the file: the sha256 of a published release does not change. A
+# different family gets a new entry. Incorrect arguments give exit code 2.
 #
 # The entry is neuralbloch_<family>, with underscores in place of hyphens. The
 # entry is not lazy: Pkg downloads it with the package, from the release URL,
@@ -32,7 +38,8 @@
 
 using NeuralBloch
 using NeuralBloch: BundleError, contract_problems
-using Pkg.Artifacts: artifact_hash, artifact_path, bind_artifact!, download_artifact, ensure_artifact_installed
+using Pkg.Artifacts: artifact_hash, artifact_meta, artifact_path, bind_artifact!, download_artifact,
+                     ensure_artifact_installed
 using SHA: sha256
 using Tar: Tar
 
@@ -74,8 +81,9 @@ function main(args; stdout::IO = Base.stdout, stderr::IO = Base.stderr)
     catch err
         return refuse("it is not a gzip-compressed tarball: ", sprint(showerror, err))
     end
-    # Pkg unpacks the file and checks the two hashes, as after a download.
-    # Unset JULIA_PKG_IGNORE_HASHES: it lets a wrong tree hash pass.
+    # If the depot does not have the tree, Pkg unpacks the file and checks the
+    # two hashes, as after a download. Unset JULIA_PKG_IGNORE_HASHES: it lets
+    # a wrong tree hash pass.
     installed = withenv("JULIA_PKG_IGNORE_HASHES" => nothing) do
         download_artifact(tree, "file://" * tarball, sha; quiet_download = true, io = stderr)
     end
@@ -91,10 +99,21 @@ function main(args; stdout::IO = Base.stdout, stderr::IO = Base.stderr)
     isempty(extra) || return refuse("it holds files its card does not name: ", join(extra, ", "))
 
     entry = artifact_name(new.family)
+    url = release_url(new.family, new.version)
     bound = isfile(toml) ? artifact_hash(entry, toml) : nothing
     if bound == tree
-        println(stdout, "$toml already binds $(new.family) v$(new.version) as $entry.")
-        return 0
+        # The same contents can come from a different file. Pkg checks the
+        # sha256 of the file that it downloads, thus the entry must name
+        # this file.
+        downloads = get(artifact_meta(entry, toml), "download", [])
+        if any(d -> get(d, "url", nothing) == url && get(d, "sha256", nothing) == sha, downloads)
+            println(stdout, "$toml already binds $(new.family) v$(new.version) as $entry.")
+            return 0
+        end
+        return refuse("$toml binds its contents as $entry from a different file: ",
+                      join(("$(get(d, "url", "?")) (sha256 $(get(d, "sha256", "?")))" for d in downloads), ", "),
+                      ". This file has sha256 $sha. Use the file of the release. To replace the file of a ",
+                      "version that is not published, see \"Versions and families\" in the README.")
     elseif bound === nothing
         println(stdout, "Adding family $(new.family) to $toml as $entry.")
     else
@@ -112,7 +131,6 @@ function main(args; stdout::IO = Base.stdout, stderr::IO = Base.stderr)
             end
         end
     end
-    url = release_url(new.family, new.version)
     bind_artifact!(toml, entry, tree; download_info = [(url, sha)], lazy = false, force = true)
     println(stdout, "Bound $(new.family) v$(new.version) as $entry in $toml:\n",
             "  git-tree-sha1 = $(bytes2hex(tree.bytes))\n  sha256 = $sha\n  url = $url\n",

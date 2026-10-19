@@ -289,6 +289,16 @@ tier(:T0, "model: bind_bundle.jl binds a release file within the family's contra
         @test !haskey(entry(), "lazy")                                       # downloaded with the package
         ok, out, _ = bind(v1)
         @test ok && occursin("already binds fisp600-rank16 v0.1.0-beta.1", out)
+        # The same contents compressed again: the same tree, a different sha256
+        before = read(toml)
+        again = joinpath(mkpath(joinpath(dir, "again")), basename(v1))
+        run(pipeline(`gzip -dc $v1`, `gzip -1n`, again))
+        @test Tar.tree_hash(`gzip -dc $again`) == entry()["git-tree-sha1"] && read(again) != read(v1)
+        ok, _, err = bind(again)
+        @test !ok && occursin("binds its contents as neuralbloch_fisp600_rank16 from a different file: " *
+                              "$(url("0.1.0-beta.1")) (sha256 $(bytes2hex(open(sha256, v1))))", err)
+        @test occursin("This file has sha256 $(bytes2hex(open(sha256, again)))", err)
+        @test read(toml) == before
 
         v2 = release(s -> replace(s, "T1 = [0.1, 6.0]" => "T1 = [0.1, 7.0]"), "0.1.0-beta.2")
         ok, _, _ = bind(v2)
@@ -316,6 +326,19 @@ tier(:T0, "model: bind_bundle.jl binds a release file within the family's contra
             @test !ok && occursin(words, err)
             @test read(toml) == before                                      # unchanged
         end
+        ok, _, err = bind(joinpath(dir, "missing.tar.gz"))
+        @test !ok && occursin("there is no such file", err)
+        @test BindBundle.main(String[]; stdout = devnull, stderr = devnull) == 2
+        @test BindBundle.main(["a", "b", "c"]; stdout = devnull, stderr = devnull) == 2
+
+        # A second family gets its own entry, next to the first
+        other = release(s -> replace(s, "family = \"fisp600-rank16\"" => "family = \"fisp600b-rank16\""), "0.2.0";
+                        name = "neuralbloch-model-fisp600b-rank16-v0.2.0.tar.gz")
+        ok, out, _ = bind(other)
+        @test ok && occursin("Adding family fisp600b-rank16 to $toml as neuralbloch_fisp600b_rank16", out)
+        @test entry()["download"][1]["url"] == url("0.1.0-beta.2")
+        @test TOML.parsefile(toml)["neuralbloch_fisp600b_rank16"]["download"][1]["url"] ==
+              replace(url("0.2.0"), "fisp600-rank16" => "fisp600b-rank16")
 
         # Pkg downloads what is bound: the entry of v2, with the local file in
         # place of its URL, installs into an empty depot, without the package

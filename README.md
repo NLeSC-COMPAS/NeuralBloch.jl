@@ -228,10 +228,12 @@ To adopt a new model, do these steps:
    julia --project dev/bind_bundle.jl neuralbloch-model-fisp600-rank16-v0.1.0-beta.2.tar.gz
    ```
 
-   The script installs the file with Pkg and checks its two hashes. Then it
-   writes the entry of the family in `Artifacts.toml`. If the file does not
-   obey the rules in [Versions and families](#versions-and-families), the
-   script does not change `Artifacts.toml`.
+   The script calculates the two hashes of the file. If the depot does not
+   have the contents of the file, Pkg installs the file and checks the two
+   hashes. Then the script writes the entry of the family in
+   `Artifacts.toml`. If the file does not obey the rules in
+   [Versions and families](#versions-and-families), the script does not
+   change `Artifacts.toml`.
 
 3. Update the values that change with the model:
 
