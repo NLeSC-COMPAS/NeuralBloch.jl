@@ -113,6 +113,11 @@ tier(:T0, "model: malformed cards") do
         (s -> replace(s, "[model]" => "[model")) => "is not valid TOML",
         (s -> replace(s, "rf_data/rf_angle_list.txt" => "rf_data/missing.txt")) => "missing.txt, which",
         (s -> replace(s, "onnx = \"model_signal.onnx\"" => "onnx = \"other.onnx\"")) => "[model.signal] onnx names other.onnx, which",
+        # A file outside the bundle, also one that exists, is not in the release
+        (s -> replace(s, "\"rf_data/rf_angle_list.txt\"" => repr(joinpath(BUNDLE, "rf_data", "rf_angle_list.txt")))) =>
+            "[sequence] rf_angle names $(joinpath(BUNDLE, "rf_data", "rf_angle_list.txt")), which is outside the bundle",
+        (s -> replace(s, "\"rf_data/rf_phase_list.txt\"" => "\"rf_data/../../rf_phase_list.txt\"")) =>
+            "[sequence] rf_phase names rf_data/../../rf_phase_list.txt, which is outside the bundle",
         (s -> replace(s, r"\nupstream = [^\n]*" => "")) => "[provenance] upstream is missing",
     ]
     for (edit, words) in cases
@@ -154,7 +159,27 @@ tier(:T0, "model: each ONNX must be the one the card pins") do
             @test occursin(file, msg)
         end
     end
-    @test_throws BundleError Model("/nonexistent/bundle")
+    err = @test_throws BundleError Model("/nonexistent/bundle")
+    @test occursin("/nonexistent/bundle does not exist", sprint(showerror, err.value))
+end
+
+tier(:T0, "model: a symbolic link must not point outside the bundle") do
+    mktempdir() do dir
+        b = edited_bundle(identity, dir)
+        rf = joinpath(b, "rf_data", "rf_angle_list.txt")
+        # A link to a file in the bundle is a file of the bundle
+        mv(rf, joinpath(b, "rf_data", "angles.txt"))
+        symlink("angles.txt", rf)
+        @test Model(b).sequence.rf_angle == Model().sequence.rf_angle
+        # A link to a file outside the bundle is not
+        outside = joinpath(dir, "angles.txt")
+        mv(joinpath(b, "rf_data", "angles.txt"), outside)
+        rm(rf)
+        symlink(outside, rf)
+        err = @test_throws BundleError Model(b)
+        @test occursin("[sequence] rf_angle names rf_data/rf_angle_list.txt, which is outside the bundle",
+                       sprint(showerror, err.value))
+    end
 end
 
 tier(:T0, "model: a relative directory") do
@@ -264,6 +289,9 @@ tier(:T0, "model: bind_bundle.jl binds a release file within the family's contra
                 "must be named $(basename(url("0.1.0-beta.5")))",
             release(s -> replace(s, "schema_version = \"1.0\"" => "schema_version = \"9.0\""), "0.1.0-beta.7") =>
                 "has schema_version 9.0",
+            # The file is in the depot of this machine, but not in the release
+            release(s -> replace(s, "\"rf_data/rf_phase_list.txt\"" => "\"../rf_phase_list.txt\""), "0.1.0-beta.9") =>
+                "names ../rf_phase_list.txt, which is outside the bundle",
             truncated => "not a gzip-compressed tarball",
         ]
         for (file, words) in cases

@@ -76,6 +76,7 @@ bundles, for example your own export, from their directory.
 
 - the schema version of the card (1.x),
 - the presence and the type of each field,
+- the files that the card names: relative to `dir`, and in the bundle,
 - the sha256 of each ONNX file, against the value that the card pins,
 - the RF tables: one entry for each readout.
 
@@ -150,10 +151,16 @@ function field(card, path, table, key, ::Type{T}) where {T}
 end
 
 # Return the path of a file that the card names. The name is relative to the
-# bundle.
+# bundle, and the file must be in the bundle. Pkg installs only the bundle,
+# thus a file outside it is not on the computer of a user.
 function bundlefile(dir, path, table, key, name)
+    outside() = throw(BundleError(
+        "$path: [$table] $key names $name, which is outside the bundle; names are relative to $dir"))
+    (isabspath(name) || first(splitpath(normpath(name))) == "..") && outside()
     file = joinpath(dir, name)
     isfile(file) || throw(BundleError("$path: [$table] $key names $name, which $dir does not have"))
+    # A symbolic link in the bundle can also point outside it.
+    startswith(realpath(file), joinpath(realpath(dir), "")) || outside()
     return file
 end
 
@@ -181,6 +188,7 @@ end
 
 function Model(dir::AbstractString = artifact"neuralbloch_fisp600_rank16")
     dir = abspath(dir)
+    isdir(dir) || throw(BundleError("$dir does not exist"))
     path = joinpath(dir, CARD)
     if !isfile(path)
         isfile(joinpath(dir, "card.toml")) && throw(BundleError(
