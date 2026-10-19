@@ -8,7 +8,6 @@
 #   T0  Julia only
 #   T1  + g++, TensorRT's headers and libraries (native code)
 #   T2  + a functional CUDA GPU
-#   T3  + BlochSimulators in the test environment (accuracy against EPG)
 
 using NeuralBloch: TensorRT
 
@@ -23,9 +22,6 @@ function blocker(t::Symbol)
     t === :T1 && return nothing
     SYSTEM.gpu === nothing && return "no functional CUDA GPU: " * SYSTEM.gpu_error
     t === :T2 && return nothing
-    Base.find_package("BlochSimulators") === nothing &&
-        return "BlochSimulators is not in the test environment"
-    t === :T3 && return nothing
     error("unknown test tier $t")
 end
 

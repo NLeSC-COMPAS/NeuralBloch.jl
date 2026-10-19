@@ -1,7 +1,7 @@
 # The ground truth to compare with: the FISP3D EPG simulation of
 # BlochSimulators. This simulation made the training data. The derivative
 # method, the sequence and the training domain come from the model card.
-# scripts/validate.jl, dev/compare_mrstat.jl and test/test_accuracy.jl include
+# scripts/validate.jl, scripts/golden.jl and dev/compare_mrstat.jl include
 # this file.
 
 using NeuralBloch: Model, domain, sequence

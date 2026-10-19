@@ -241,7 +241,8 @@ To adopt a new model, do these steps:
    |---|---|
    | `test/test_model.jl` | Version, ONNX hashes, domain, and `upstream` (the NeuralBloch commit) |
    | `test/test_predict.jl` | Domain |
-   | `test/test_accuracy.jl`, `scripts/validate.jl` | Accuracy bounds. First, measure the model with `scripts/validate.jl`. |
+   | `scripts/validate.jl` | Accuracy thresholds for the new version. First, measure the model with `scripts/validate.jl`. |
+   | `test/golden.toml` | Write it again with `julia --project=scripts scripts/golden.jl`. Make sure that the NMAE it gives is near the NMAE of `scripts/validate.jl`. |
    | `README.md` | Version, domain, release link, and "Accuracy and speed" |
    | `dev/NOTES.md` | A record of the model, its file and its measurements |
 

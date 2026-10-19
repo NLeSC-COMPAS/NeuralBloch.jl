@@ -525,6 +525,35 @@ set and 1.1837 / 0.6952 / 1.1449 % on the T3 set. `scripts/distribution.jl`
 downloads the artifact from the release, so it can run only once the release
 exists.
 
+## Golden values in place of the T3 test (2026-10-19)
+
+The T3 test (`test/test_accuracy.jl`) compared the predictions for 2000
+voxels with the EPG simulation of BlochSimulators. That is a comparison with
+an external reference, which belongs in `scripts/` (the header of
+`test/runtests.jl`), and `scripts/validate.jl` measures the same NMAE on
+14400 voxels with tighter thresholds. But T3 was the only test that compared
+the outputs with an absolute reference: the T2 tests compare the engines with
+each other, thus an error that all of them share (T₁ and T₂ in the wrong
+rows of `x`, Re and Im exchanged, other units for the derivatives) passes
+them.
+
+`test/test_golden.jl` (T2) now does that check without BlochSimulators in
+the test environment. `scripts/golden.jl` writes `test/golden.toml`: 8
+voxels (`evaluation_set(model, 8; seed = 8)`), every 25th readout (24 of
+600) of the EPG signal and derivatives, and the NMAE of the model on them.
+The file names the family and the version; for another model the test fails
+and asks for a new file. The script gives the same file byte for byte.
+
+| | signal | ∂T₁ | ∂T₂ |
+|---|---|---|---|
+| NMAE on the golden values, 0.1.0-beta.1 | 1.0197 % | 0.5622 % | 0.8547 % |
+| Bound of the test: 2 × measured | 2.04 % | 1.12 % | 1.71 % |
+| T₁ and T₂ exchanged in the input | 54 × bound | 163 × bound | 48 × bound |
+| Re and Im exchanged in the output | 65 × bound | 119 × bound | 70 × bound |
+
+BlochSimulators, ComputationalResources and Random left the test
+environment. The tiers are now T0 to T2.
+
 ## Decisions
 
 Phase 0 settles the open questions below. Where the plan's "Decisions needed"
@@ -557,3 +586,4 @@ table recommends an option, implementation follows that recommendation.
 | D23 | Bundle updates | ~~`dev/update_bundle.jl` installs a bundle into `models/`~~ `dev/bind_bundle.jl` binds a release file (D24); within a family, `contract_problems` (in the package, so the suite tests it) requires the same readouts, rank, sequence, RF tables and constraint, a domain the same or wider, and a higher version. Field by field, not a stored hash: it names what differs, and a wider domain is allowed | three-engine plan |
 | D24 | Bundle delivery | A non-lazy Pkg artifact per family, `neuralbloch_<family>` in `Artifacts.toml`, downloaded with the package from NeuralBloch's release `model-<family>-v<version>`, whose one file is the bundle's reproducible tarball; `Model()` reads `neuralbloch_fisp600_rank16`. `dev/bind_bundle.jl` binds a local release file before it is published, installing it through Pkg's own unpacking and checks of both hashes. Model releases are pre-releases or not marked latest; a published file is never replaced, so a fix is a new version | three-engine plan, phase 2 |
 | D25 | Model and card versions | The model's version is a semantic version without build metadata, e.g. `0.1.0-beta.1`: PATCH re-exports the same weights, MINOR brings new weights or a wider domain, MAJOR stays 0 until the family is stable. Only the order is enforced: `VersionNumber`, after the strict pattern. The card versions itself separately: `model_card.toml` (formerly `card.toml`) starts with `schema_version = "1.0"`, "MAJOR.MINOR", replacing the integer `format` (1 to 3, never published). A newer MINOR only adds fields, which `Model` ignores; another MAJOR is refused | user decisions, 2026-10-15 and 2026-10-16 |
+| D26 | Accuracy in the suite | Golden EPG values for 8 voxels (`test/golden.toml`, T2, bound 2 × the NMAE that `scripts/golden.jl` measured), keyed by family and version; the EPG comparison on a large set is `scripts/validate.jl` only. BlochSimulators is not in the test environment | review of the three-engine branch, 2026-10-19 |
