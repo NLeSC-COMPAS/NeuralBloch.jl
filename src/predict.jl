@@ -341,15 +341,18 @@ within(::Type, lo, hi, vmin, vmax) = lo ≤ vmin && vmax ≤ hi
 Show what NeuralBloch uses on this machine: the model, the cache, and the
 system prerequisites (the TensorRT libraries and headers, the CUDA headers,
 g++, the GPU). For each missing item, it shows the apt or dnf command that
-installs it.
+installs it. If the model is not installed or not correct, the report shows
+the error and continues.
 """
 function versioninfo(io::IO = stdout)
     println(io, "NeuralBloch ", pkgversion(@__MODULE__))
+    # The report continues without the model: a bundle that is not correct or
+    # not installed (Artifacts throws an ErrorException) is a problem to show.
     model = try
         m = Model()
         "$(m.family) v$(m.version) in $(m.dir) (NTR $(m.ntr), rank $(m.rank), $(m.provenance["upstream"]))"
     catch err
-        err isa BundleError || rethrow()
+        err isa InterruptException && rethrow()
         sprint(showerror, err)
     end
     println(io, "  model: ", model)

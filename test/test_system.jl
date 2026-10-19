@@ -1,6 +1,7 @@
 # system.jl: finding TensorRT, the headers, g++ and the GPU.
 
 using Libdl: Libdl
+using Pkg.Artifacts: artifact_hash
 
 tier(:T0, "system: parsing") do
     trt11 = """
@@ -133,6 +134,23 @@ tier(:T0, "system: report") do
     @test occursin("\n  model: fisp600-rank16 v0.1.0-beta.1 in $BUNDLE (NTR 600, rank 16, NeuralBloch@", text)
     @test occursin("\n  cache: $(TensorRT.cache_root())\n", text)
     @test occursin("TensorRT library", text)
+end
+
+tier(:T0, "system: the report without the model") do
+    # An Overrides.toml in a depot before the others moves the artifact to a
+    # directory that does not exist: the model is not installed.
+    mktempdir() do depot
+        tree = artifact_hash("neuralbloch_fisp600_rank16", joinpath(pkgdir(NeuralBloch), "Artifacts.toml"))
+        write(joinpath(mkpath(joinpath(depot, "artifacts")), "Overrides.toml"),
+              "$(bytes2hex(tree.bytes)) = \"$(joinpath(depot, "missing"))\"\n")
+        env = merge(ENV, Dict("JULIA_DEPOT_PATH" => join([depot; DEPOT_PATH], ':')))
+        cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project()) -e
+               'using NeuralBloch; NeuralBloch.versioninfo()'`
+        text = read(setenv(cmd, env), String)
+        @test occursin("\n  model: Artifact \"neuralbloch_fisp600_rank16\" was not found", text)
+        @test occursin("\n  cache: ", text)
+        @test occursin("TensorRT library", text)
+    end
 end
 
 tier(:T0, "system: what detection skips") do
