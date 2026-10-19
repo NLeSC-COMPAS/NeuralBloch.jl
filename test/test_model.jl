@@ -6,27 +6,10 @@ using SHA: sha256
 using Tar: Tar
 using TOML: TOML
 
-# The default bundle: the artifact Pkg installed with the package.
-const BUNDLE = Model().dir
-
 # The sha256 the default card pins for each target's ONNX model.
 const PINNED = (signal_and_derivatives = "757a2fd6a70e4ac6aad3b89596ea0c6f63f17d8353c97169cc43db9c86947cf4",
                 signal = "0e23650b9df0b2680c40c2a7f13a6fd1e607195a3f844baca0920de7f9ea8c25",
                 coefficients = "c5e5b642208c941b87896791853b5e423f3a842fb6bd38a8cb6c1edcb1d4f0bc")
-
-# A private copy of the bundle in `dir`. Its model_card.toml is
-# `edit`(original text), with `version` in place of the original version, and
-# `files`(copy) changes the other files. The files of the artifact are
-# read-only, and cp keeps their mode, thus the test makes the copy writable.
-function edited_bundle(edit, dir; version = "0.1.0-beta.1", files = identity)
-    b = joinpath(dir, "bundle")
-    cp(BUNDLE, b)
-    chmod(b, 0o755; recursive = true)
-    card = joinpath(b, "model_card.toml")
-    write(card, edit(replace(read(card, String), "version = \"0.1.0-beta.1\"" => "version = \"$version\"")))
-    files(b)
-    return b
-end
 
 tier(:T0, "model: the default bundle") do
     m = Model()
@@ -167,6 +150,15 @@ tier(:T0, "model: each ONNX must be the one the card pins") do
         end
     end
     @test_throws BundleError Model("/nonexistent/bundle")
+end
+
+tier(:T0, "model: a relative directory") do
+    mktempdir() do dir
+        b = edited_bundle(identity, dir)
+        m = cd(() -> Model("bundle"), dir)
+        @test isabspath(m.dir) && samefile(m.dir, b)
+        @test all(f -> isabspath(f) && isfile(f), m.onnx)
+    end
 end
 
 tier(:T0, "model: a family's contract between versions") do

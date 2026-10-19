@@ -126,7 +126,13 @@ tier(:T0, "system: report") do
     # detect() never throws, whatever the machine.
     @test TensorRT.detect() isa TensorRT.System
     @test NeuralBloch.functional() isa Bool
-    @test occursin("TensorRT", sprint(NeuralBloch.versioninfo))
+
+    # The report of the package: the model, the cache, then the system.
+    text = sprint(NeuralBloch.versioninfo)
+    @test startswith(text, "NeuralBloch $(pkgversion(NeuralBloch))\n")
+    @test occursin("\n  model: fisp600-rank16 v0.1.0-beta.1 in $BUNDLE (NTR 600, rank 16, NeuralBloch@", text)
+    @test occursin("\n  cache: $(TensorRT.cache_root())\n", text)
+    @test occursin("TensorRT library", text)
 end
 
 # TENSORRT_ROOT's libraries come before the system's even when the system

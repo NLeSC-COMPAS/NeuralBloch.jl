@@ -298,7 +298,8 @@ stage_row!(input, row, v, N, stream) =
 Throw an `ArgumentError` if a voxel of `p` is not in the training domain
 ([`domain`](@ref)). Each of `p.T₁`, `p.T₂` and `p.B₁` that `p` has must be in
 its range (NaN is not in the range). If `p` has T₁ and T₂, T₂ < T₁ must be
-true. Outside the domain, the network extrapolates.
+true. Outside the domain, the network extrapolates. If `p` has no voxels
+(empty vectors), no voxel is outside the domain.
 
 `p` can hold GPU or CPU vectors. For GPU vectors, the function copies
 reductions to the host, thus it synchronizes. For this reason,
@@ -309,6 +310,7 @@ function checkdomain(model::Model, p)
     isempty(present) && throw(ArgumentError("p has none of the properties T₁, T₂, B₁ that checkdomain checks"))
     for name in present
         v = getproperty(p, name)
+        isempty(v) && continue                   # extrema throws for an empty CPU vector
         lo, hi = model.domain[Symbol(cardname(name))]
         vmin, vmax = extrema(v)
         within(eltype(v), lo, hi, vmin, vmax) && continue

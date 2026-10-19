@@ -3,8 +3,8 @@
 # for each target: the signal and its derivatives, the signal alone, and the
 # basis coefficients of the signal. Each target has its own engine.
 
-using NeuralBloch: Engine, Model, outputs, predict!, predict, checkdomain, ntr, rank, domain, batchprofile,
-                   sequence, TARGETS
+using NeuralBloch: Engine, Model, BundleError, outputs, predict!, predict, checkdomain, ntr, rank, domain,
+                   batchprofile, sequence, TARGETS
 using CUDACore: CUDACore, CuArray, CuMatrix, CuVector, synchronize
 using LinearAlgebra: norm
 using StructArrays: StructArray
@@ -70,6 +70,17 @@ tier(:T0, "predict: model metadata and checkdomain") do
     below = (; edges..., T₂ = [prevfloat(Float32(0.01, RoundDown)), 2.0f0])
     err = @test_throws ArgumentError checkdomain(m, below)
     @test occursin("p.T₂", sprint(showerror, err.value))
+
+    # An empty batch (a mask with no voxels) has no voxel outside the domain.
+    empty = voxels_cpu(0)
+    @test checkdomain(m, empty) === empty
+end
+
+tier(:T0, "predict: Engine refuses bad settings before it looks at the system") do
+    for batch in ((0, 1, 2), (10, 5, 20))
+        err = @test_throws ArgumentError Engine(; batch)
+        @test occursin("1 ≤ min ≤ opt ≤ max", sprint(showerror, err.value))
+    end
 end
 
 tier(:T2, "predict: engine metadata") do
@@ -84,6 +95,36 @@ tier(:T2, "predict: engine metadata") do
     @test occursin("NTR 600, rank 16", sprint(show, e))
     p = voxels(10)
     @test checkdomain(e, p) === p                               # and on the GPU
+    q = voxels_cpu(10)
+    q.B₁[7] = NaN32                                             # GPU reductions must not drop NaN
+    err = @test_throws ArgumentError checkdomain(e, map(CuArray, q))
+    @test occursin("p.B₁ ranges over [NaN, NaN]", sprint(showerror, err.value))
+    q = voxels_cpu(10)
+    q.T₁[3], q.T₂[3] = 0.3f0, 0.6f0                              # T₂ > T₁, counted on the GPU
+    err = @test_throws ArgumentError checkdomain(e, map(CuArray, q))
+    @test occursin("1 voxels have T₂ ≥ T₁", sprint(showerror, err.value))
+    empty = voxels(0)
+    @test checkdomain(e, empty) === empty
+end
+
+tier(:T2, "predict: an engine that does not match the card") do
+    # A card that names the ONNX of signal_and_derivatives for the signal
+    # target, with its sha256: Model accepts it, but the signal engine has
+    # two outputs too many. Engine must refuse it, and close the TensorRT
+    # handles that it opened before the check (≈ 440 MiB of GPU memory each).
+    m = Model()
+    swap(s) = replace(s, "onnx = \"model_signal.onnx\"" => "onnx = \"model.onnx\"",
+                      m.sha256.signal => m.sha256.signal_and_derivatives)
+    mktempdir() do dir
+        bad = Model(edited_bundle(swap, dir))
+        @test_throws BundleError Engine(bad)                    # warm-up: builds or loads what it needs
+        GC.gc(); synchronize()
+        free = CUDACore.free_memory()
+        err = @test_throws BundleError Engine(bad)
+        msg = sprint(showerror, err.value)
+        @test occursin("the signal engine does not match the model card: unexpected tensor dT1", msg)
+        @test CUDACore.free_memory() ≥ free - 64 * 2^20         # without GC: closed, not finalized
+    end
 end
 
 tier(:T2, "predict: predict and predict! agree, repeatedly, for every target") do
@@ -180,6 +221,20 @@ tier(:T2, "predict: chunks into column views") do
         end
         synchronize()
         @test map(Array, chunked) == map(Array, whole)          # bitwise (S6 ③b)
+    end
+end
+
+tier(:T2, "predict: inputs with a stride") do
+    # Every third voxel, from the second: strided copies into the input
+    # buffer must give the results of contiguous inputs, bitwise.
+    e, N = engine(), 500
+    all3 = voxels(3N; seed = 6)
+    p = map(v -> view(v, 2:3:3N), all3)
+    @test all(v -> stride(v, 1) == 3 && length(v) == N, p)
+    for target in TARGETS
+        a, b = predict(e, p; target), predict(e, map(copy, p); target)
+        synchronize()
+        @test map(Array, a) == map(Array, b)
     end
 end
 
@@ -325,6 +380,19 @@ tier(:T2, "predict: a small engine for small problems") do
     end
 end
 
+tier(:T2, "predict: tf32 reaches the builder of each engine") do
+    settings = TensorRT.BuildSettings(; batch = (1, 64, 1000), tf32 = true)
+    e = Engine(; settings.batch, tf32 = true)
+    for target in TARGETS
+        path = TensorRT.build(e.model.onnx[target]; settings)  # from the cache that Engine filled
+        @test TensorRT.read_manifest(dirname(path))["info"]["tf32"] == true
+        out = predict(e, voxels(64; seed = 14); target)
+        synchronize()
+        @test all(A -> all(isfinite, Array(A)), out)
+    end
+    close(e)
+end
+
 tier(:T2, "predict: close") do
     e = Engine(; batch = (1, 64, 1000))
     p = voxels(8)
@@ -336,6 +404,7 @@ tier(:T2, "predict: close") do
     used = CUDACore.used_memory()
     close(e)
     @test !isopen(e)
+    @test endswith(sprint(show, e), ", closed)")
     @test all(t -> !isopen(t.handle), e.targets)                 # every engine
     @test used - CUDACore.used_memory() ≥ own                   # its buffers too, not only TensorRT's
     close(e)                                                    # idempotent
