@@ -98,9 +98,21 @@ tier(:T0, "model: malformed cards") do
         (s -> replace(s, version => "version = \"0.1.0-beta.01\"")) => semantic,
         (s -> replace(s, version => "version = \"0.1.0+build.1\"")) => semantic,
         (s -> replace(s, r"\[model\.coefficients\].*?\n\n"s => "")) => "table [model.coefficients] is missing",
-        (s -> replace(s, "T1 = [0.1, 6.0]" => "T1 = [6.0, 0.1]")) => "[domain] T1 must be two numbers [low, high] with low < high",
-        (s -> replace(s, "T1 = [0.1, 6.0]" => "T1 = [0.1]")) => "[domain] T1 must be two numbers",
-        (s -> replace(s, "TR = 0.00558" => "TR = \"5.58 ms\"")) => "[sequence] TR must be a number",
+        (s -> replace(s, "T1 = [0.1, 6.0]" => "T1 = [6.0, 0.1]")) =>
+            "[domain] T1 must be two finite numbers [low, high] with 0 < low < high",
+        (s -> replace(s, "T1 = [0.1, 6.0]" => "T1 = [0.1]")) => "[domain] T1 must be two finite numbers",
+        (s -> replace(s, "T1 = [0.1, 6.0]" => "T1 = [-inf, inf]")) => "[domain] T1 must be two finite numbers",
+        (s -> replace(s, "T2 = [0.01, 2.0]" => "T2 = [0.0, 2.0]")) => "[domain] T2 must be two finite numbers",
+        (s -> replace(s, "TR = 0.00558" => "TR = \"5.58 ms\"")) => "[sequence] TR must be a finite number",
+        (s -> replace(s, "TR = 0.00558" => "TR = nan")) => "[sequence] TR must be a finite number, not NaN",
+        (s -> replace(s, "TR = 0.00558" => "TR = true")) => "[sequence] TR must be a finite number, not true",
+        (s -> replace(s, "TR = 0.00558" => "TR = 0.0")) => "[sequence] TR must be positive, not 0.0",
+        (s -> replace(s, "max_state = 64" => "max_state = 0")) => "[sequence] max_state must be positive, not 0",
+        (s -> replace(s, "ntr = 600" => "ntr = true")) => "[model] ntr must be an integer, not true",
+        # PCRE's $ also matches before a newline at the end
+        (s -> replace(s, "family = \"fisp600-rank16\"" => "family = \"fisp600-rank16\\n\"")) =>
+            "[model] family \"fisp600-rank16\\n\" must be",
+        (s -> replace(s, PINNED.signal => PINNED.signal * "\\n")) => "[model.signal] sha256 must be 64 hexadecimal digits",
         (s -> replace(s, "inversion_prepulse = true" => "inversion_prepulse = \"yes\"")) => "[sequence] inversion_prepulse must be true or false",
         (s -> replace(s, "constraint = \"T2 < T1\"" => "constraint = \"T1 < T2\"")) => "unsupported constraint \"T1 < T2\"",
         (s -> replace(s, sensitivity => "method = \"adjoint\"")) => "[derivatives] method \"adjoint\" is not one of",
@@ -143,6 +155,9 @@ tier(:T0, "model: RF tables must match ntr") do
         write(rf, "1.0\nnot a number\n")
         err = @test_throws BundleError Model(b)
         @test occursin("rf_phase_list.txt:2: not a number", sprint(showerror, err.value))
+        write(rf, "1.0\nNaN\n")
+        err = @test_throws BundleError Model(b)
+        @test occursin("rf_phase_list.txt:2: not a finite number", sprint(showerror, err.value))
     end
 end
 
@@ -197,6 +212,8 @@ tier(:T0, "model: a family's contract between versions") do
     later(edit; version = "0.1.0-beta.2", files = identity) = Model(edited_bundle(edit, mktempdir(); version, files))
     @test contract_problems(current, later(identity)) == String[]
     @test contract_problems(current, later(identity; version = "0.1.0")) == String[]   # the release after its betas
+    @test later(identity; version = "0.1.0-rc.1").version == v"0.1.0-rc.1"
+    @test later(identity; version = "1.0.0-x-y.2").version == v"1.0.0-x-y.2"
     @test contract_problems(current, later(s -> replace(s, "T1 = [0.1, 6.0]" => "T1 = [0.05, 7.0]"))) == String[]
     cases = [  # the later bundle => words that one of the problems must contain
         later(identity; version = "0.1.0-beta.1") => "version 0.1.0-beta.1 does not follow version 0.1.0-beta.1",

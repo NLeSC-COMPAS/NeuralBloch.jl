@@ -51,7 +51,7 @@ const DERIVATIVE_METHODS = ("forward sensitivity", "forward difference")
 # The name of a family is <sequence><ntr>-rank<rank>, with an optional
 # qualifier: lowercase words with hyphens between them. Exactly one word is
 # rank<N>.
-const FAMILY_PATTERN = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+const FAMILY_PATTERN = r"\A[a-z0-9]+(-[a-z0-9]+)*\z"
 
 # A version is a semantic version without build metadata: MAJOR.MINOR.PATCH,
 # with an optional pre-release such as -beta.1. The export_bundle script of
@@ -75,10 +75,16 @@ bundles, for example your own export, from their directory.
 `Model` checks all of the bundle:
 
 - the schema version of the card (1.x),
-- the presence and the type of each field,
+- the presence and the type of each field. All numbers must be finite.
+- the values: a semantic version, a family name that states the rank of the
+  card, a positive ntr and rank, training ranges with 0 < low < high, a
+  supported domain constraint and derivative method (with steps only for
+  forward differences), and a positive TR, TE, max_state, repetitions and
+  undersampling factor,
 - the files that the card names: relative to `dir`, and in the bundle,
-- the sha256 of each ONNX file, against the value that the card pins,
-- the RF tables: one entry for each readout.
+- the sha256 of each ONNX file (64 hexadecimal digits), against the value
+  that the card pins,
+- the RF tables: one finite number for each readout.
 
 If a check fails, `Model` throws a [`BundleError`](@ref).
 
@@ -118,11 +124,11 @@ struct Model
     provenance::Dict{String,String}
 end
 
-describe(::Type{Float64}) = "a number"
+describe(::Type{Float64}) = "a finite number"
 describe(::Type{Int}) = "an integer"
 describe(::Type{Bool}) = "true or false"
 describe(::Type{String}) = "a string"
-describe(::Type{Range}) = "two numbers [low, high] with low < high"
+describe(::Type{Range}) = "two finite numbers [low, high] with 0 < low < high"
 describe(::Type{VersionNumber}) =
     "a semantic version MAJOR.MINOR.PATCH[-PRERELEASE] without build metadata, e.g. \"0.1.0-beta.1\""
 
@@ -139,12 +145,15 @@ function field(card, path, table, key, ::Type{T}) where {T}
     t isa AbstractDict || throw(BundleError("$path: table [$table] is missing"))
     haskey(t, key) || throw(BundleError("$path: [$table] $key is missing"))
     v = t[key]
-    T === Float64 && isnumber(v) && return Float64(v)
+    T === Float64 && isnumber(v) && isfinite(v) && return Float64(v)
     T === Int && v isa Integer && !(v isa Bool) && return Int(v)
     T === Bool && v isa Bool && return v
     T === String && v isa AbstractString && return String(v)
     T === VersionNumber && v isa AbstractString && occursin(SEMVER, v) && return VersionNumber(v)
-    if T === Range && v isa AbstractVector && length(v) == 2 && all(isnumber, v) && v[1] < v[2]
+    # A range is of T1, T2 or B1. The network takes the log of T1 and T2, and B1
+    # is a positive scale factor, thus 0 < low.
+    if T === Range && v isa AbstractVector && length(v) == 2 && all(x -> isnumber(x) && isfinite(x), v) &&
+       0 < v[1] < v[2]
         return (Float64(v[1]), Float64(v[2]))
     end
     throw(BundleError("$path: [$table] $key must be $(describe(T)), not $(repr(v))"))
@@ -171,6 +180,7 @@ function rftable(file, ntr)
         isempty(strip(line)) && continue
         v = tryparse(Float64, line)
         v === nothing && throw(BundleError("$file:$i: not a number: $(repr(line))"))
+        isfinite(v) || throw(BundleError("$file:$i: not a finite number: $(repr(line))"))
         push!(values, v)
     end
     length(values) == ntr ||
@@ -182,7 +192,7 @@ end
 # agree with the pattern.
 function familyrank(family)
     occursin(FAMILY_PATTERN, family) || return nothing
-    ranks = [m[1] for m in (match(r"^rank([1-9][0-9]*)$", w) for w in split(family, '-')) if m !== nothing]
+    ranks = [m[1] for m in (match(r"\Arank([1-9][0-9]*)\z", w) for w in split(family, '-')) if m !== nothing]
     return length(ranks) == 1 ? parse(Int, ranks[1]) : nothing
 end
 
@@ -231,7 +241,7 @@ function Model(dir::AbstractString = artifact"neuralbloch_fisp600_rank16")
     pinned = map(TARGETS) do target
         table = "model.$target"
         sha = need(String, table, "sha256")
-        occursin(r"^[0-9a-f]{64}$", sha) ||
+        occursin(r"\A[0-9a-f]{64}\z", sha) ||
             throw(BundleError("$path: [$table] sha256 must be 64 hexadecimal digits, not $(repr(sha))"))
         onnxfile = file(table, "onnx")
         actual = bytes2hex(open(SHA.sha256, onnxfile))
@@ -262,14 +272,15 @@ function Model(dir::AbstractString = artifact"neuralbloch_fisp600_rank16")
     derivatives = (; method, dT1_step = fdstep("dT1_step"), dT2_step = fdstep("dT2_step"))
 
     rf(key) = rftable(file("sequence", key), ntr)
+    # TI, TW and delta_k_spoil can be 0. The other numbers cannot.
     sequence = (kind = need(String, "sequence", "kind"),
-                TR = need(Float64, "sequence", "TR"), TE = need(Float64, "sequence", "TE"),
+                TR = positive(Float64, "sequence", "TR"), TE = positive(Float64, "sequence", "TE"),
                 TI = need(Float64, "sequence", "TI"), TW = need(Float64, "sequence", "TW"),
-                max_state = need(Int, "sequence", "max_state"),
-                repetitions = need(Int, "sequence", "repetitions"),
+                max_state = positive(Int, "sequence", "max_state"),
+                repetitions = positive(Int, "sequence", "repetitions"),
                 inversion_prepulse = need(Bool, "sequence", "inversion_prepulse"),
                 wait_spoiling = need(Bool, "sequence", "wait_spoiling"),
-                undersampling_factor = need(Int, "sequence", "undersampling_factor"),
+                undersampling_factor = positive(Int, "sequence", "undersampling_factor"),
                 delta_k_spoil = need(Float64, "sequence", "delta_k_spoil"),
                 rf_angle = rf("rf_angle"), rf_phase = rf("rf_phase"))
     need(String, "provenance", "upstream")
