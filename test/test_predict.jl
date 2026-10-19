@@ -419,9 +419,13 @@ tier(:T2, "predict: the garbage collector releases an engine that is not closed"
     use_and_drop()                                              # warm-up: builds or loads what it needs
     GC.gc(); GC.gc()
     free = CUDACore.free_memory()
-    @test use_and_drop() ≤ free - 400 * 2^20                    # the engine held its memory
+    # The engine held its memory: more than two times the tolerance of the
+    # release check below, thus the release check has a meaning. The amount
+    # depends on the GPU and TensorRT; it is not a value of this test.
+    tolerance = 64 * 2^20
+    @test free - use_and_drop() > 2tolerance
     GC.gc(); GC.gc()
-    @test CUDACore.free_memory() ≥ free - 64 * 2^20
+    @test CUDACore.free_memory() ≥ free - tolerance
 end
 
 tier(:T2, "predict: close") do
