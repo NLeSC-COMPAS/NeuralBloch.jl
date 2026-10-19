@@ -274,6 +274,12 @@ The parts of the version have these meanings:
 - MINOR: new weights or a larger domain.
 - MAJOR: 0 until the family is stable.
 
+After a change of the card schema MAJOR, `Artifacts.toml` can bind a bundle
+that this NeuralBloch does not read. Then `bind_bundle.jl` cannot check the
+rules, and refuses the new file. To replace that bundle, add
+`--replace-unreadable` before the file name. The script then checks only that
+the version is higher.
+
 A model with different readouts, rank or sequence is a new family.
 `bind_bundle.jl` adds a new entry for this family, but `Model()` continues to
 read `fisp600-rank16`. To change the default family, change the default of

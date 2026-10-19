@@ -1,7 +1,7 @@
 # model.jl: the bundle (ONNX per target, card, RF tables) and its checks. Julia only.
 
 using NeuralBloch: Model, BundleError, TARGETS, contract_problems
-using Pkg.Artifacts: artifact_hash, artifact_path
+using Pkg.Artifacts: artifact_hash, artifact_path, bind_artifact!
 using SHA: sha256
 using Tar: Tar
 using TOML: TOML
@@ -270,11 +270,11 @@ tier(:T0, "model: bind_bundle.jl binds a release file within the family's contra
         # with the name `name`.
         release(edit, version; files = identity, name = basename(url(version))) =
             release_file(edited_bundle(edit, mkpath(joinpath(dir, "v$version")); version, files), joinpath(dir, name))
-        function bind(file)
+        function bind(file; flags = String[], to = toml)
             out, err = IOBuffer(), IOBuffer()
             pushfirst!(DEPOT_PATH, depot)
             code = try
-                BindBundle.main([file, toml]; stdout = out, stderr = err)
+                BindBundle.main([flags; file; to]; stdout = out, stderr = err)
             finally
                 popfirst!(DEPOT_PATH)
             end
@@ -330,6 +330,27 @@ tier(:T0, "model: bind_bundle.jl binds a release file within the family's contra
         @test !ok && occursin("there is no such file", err)
         @test BindBundle.main(String[]; stdout = devnull, stderr = devnull) == 2
         @test BindBundle.main(["a", "b", "c"]; stdout = devnull, stderr = devnull) == 2
+        @test BindBundle.main(["--replace", v2]; stdout = devnull, stderr = devnull) == 2
+
+        # A bound bundle that this NeuralBloch does not read (schema 9): the
+        # script cannot check the contract
+        unreadable = joinpath(dir, "Unreadable.toml")
+        nine = release(s -> replace(s, "schema_version = \"1.0\"" => "schema_version = \"9.0\""), "0.1.0-beta.10")
+        bind_artifact!(unreadable, "neuralbloch_fisp600_rank16", Base.SHA1(Tar.tree_hash(`gzip -dc $nine`));
+                       download_info = [("file://$nine", bytes2hex(open(sha256, nine)))])
+        before = read(unreadable)
+        ok, _, err = bind(v2; to = unreadable)
+        @test !ok && occursin("binds neuralbloch_fisp600_rank16 to a bundle that this NeuralBloch does not read", err)
+        @test occursin("has schema_version 9.0", err) && occursin("use --replace-unreadable", err)
+        ok, _, err = bind(v2; flags = ["--replace-unreadable"], to = unreadable)
+        @test !ok && occursin("version 0.1.0-beta.2 does not follow its version 0.1.0-beta.10", err)
+        @test read(unreadable) == before
+        higher = release(identity, "0.1.0-beta.11")
+        ok, out, err = bind(higher; flags = ["--replace-unreadable"], to = unreadable)
+        @test ok && occursin("Bound fisp600-rank16 v0.1.0-beta.11", out)
+        @test occursin("Replacing v0.1.0-beta.10 with v0.1.0-beta.11. Only the version is checked", err)
+        @test TOML.parsefile(unreadable)["neuralbloch_fisp600_rank16"]["git-tree-sha1"] ==
+              Tar.tree_hash(`gzip -dc $higher`)
 
         # A second family gets its own entry, next to the first
         other = release(s -> replace(s, "family = \"fisp600-rank16\"" => "family = \"fisp600b-rank16\""), "0.2.0";

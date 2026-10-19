@@ -1,7 +1,7 @@
 # Bind a model release file as the artifact of this package for its model
 # family. The export_bundle script of NeuralBloch writes the release file.
 #
-#     julia --project dev/bind_bundle.jl TARBALL [ARTIFACTS_TOML]
+#     julia --project dev/bind_bundle.jl [--replace-unreadable] TARBALL [ARTIFACTS_TOML]
 #
 # TARBALL is the release file neuralbloch-model-<family>-v<version>.tar.gz:
 # the file that you download from the NeuralBloch release
@@ -20,8 +20,16 @@
 # - Its name agrees with the family and the version of its card.
 # - If ARTIFACTS_TOML binds an earlier version of the family, the new version
 #   keeps the contract of the family (NeuralBloch.contract_problems): the same
-#   readouts, rank, sequence and RF tables, a training domain that is the same
-#   or larger, and a higher version.
+#   readouts, rank, sequence and RF tables, domain constraint, a training
+#   domain that is the same or larger, and a higher version. To read the
+#   bound version, the script installs it. If the depot does not have it, Pkg
+#   downloads it from its release.
+# - If ARTIFACTS_TOML binds a bundle of the family that this NeuralBloch does
+#   not read (for example, after a change of the schema MAJOR), the script
+#   cannot check the contract, and refuses the file. With
+#   --replace-unreadable, it replaces that bundle if the new version is
+#   higher than the version in its card. It does not check the other rules
+#   of the contract.
 #
 # If a requirement is not satisfied, the script does not change
 # ARTIFACTS_TOML, lists the problems and exits with code 1. If ARTIFACTS_TOML
@@ -42,6 +50,7 @@ using Pkg.Artifacts: artifact_hash, artifact_meta, artifact_path, bind_artifact!
                      ensure_artifact_installed
 using SHA: sha256
 using Tar: Tar
+using TOML: TOML
 
 # The location of the NeuralBloch releases, and the names that export_bundle
 # gives to the release and the file of a family version
@@ -61,15 +70,33 @@ filesunder(dir) = sort!([relpath(joinpath(root, name), dir) for (root, _, names)
 # Return the bundle in `dir`, or the BundleError that refuses it.
 loaded(dir) = try Model(dir) catch err; err isa BundleError ? err : rethrow() end
 
+# Return the [model] version in the card of a bundle that Model does not
+# read, or nothing if the card does not give a semantic version.
+function cardversion(dir)
+    card = try
+        TOML.parsefile(joinpath(dir, NeuralBloch.CARD))
+    catch err
+        err isa Union{TOML.ParserError,SystemError} || rethrow()
+        return nothing
+    end
+    model = get(card, "model", nothing)
+    v = model isa AbstractDict ? get(model, "version", nothing) : nothing
+    return v isa AbstractString && occursin(NeuralBloch.SEMVER, v) ? VersionNumber(v) : nothing
+end
+
+const USAGE = "usage: julia --project dev/bind_bundle.jl [--replace-unreadable] TARBALL [ARTIFACTS_TOML]"
+
 # Return the exit code. The test suite calls this function with buffers for
 # stdout and stderr.
 function main(args; stdout::IO = Base.stdout, stderr::IO = Base.stderr)
-    if !(1 ≤ length(args) ≤ 2)
-        println(stderr, "usage: julia --project dev/bind_bundle.jl TARBALL [ARTIFACTS_TOML]")
+    replace_unreadable = "--replace-unreadable" in args
+    paths = filter(!=("--replace-unreadable"), args)
+    if !(1 ≤ length(paths) ≤ 2) || any(startswith('-'), paths)
+        println(stderr, USAGE)
         return 2
     end
-    tarball = abspath(args[1])
-    toml = abspath(length(args) == 2 ? args[2] : joinpath(pkgdir(NeuralBloch), "Artifacts.toml"))
+    tarball = abspath(paths[1])
+    toml = abspath(length(paths) == 2 ? paths[2] : joinpath(pkgdir(NeuralBloch), "Artifacts.toml"))
     refuse(why...) = (println(stderr, "Refusing $tarball: ", why...); 1)
     isfile(tarball) || return refuse("there is no such file")
 
@@ -117,10 +144,24 @@ function main(args; stdout::IO = Base.stdout, stderr::IO = Base.stderr)
     elseif bound === nothing
         println(stdout, "Adding family $(new.family) to $toml as $entry.")
     else
-        current = loaded(ensure_artifact_installed(entry, toml; io = stderr))
+        installed = try
+            ensure_artifact_installed(entry, toml; io = stderr)
+        catch err
+            err isa InterruptException && rethrow()
+            return refuse("cannot install $entry, which $toml binds now: ", sprint(showerror, err))
+        end
+        current = loaded(installed)
         if current isa BundleError
-            println(stdout, "$toml binds $entry to a bundle this NeuralBloch does not read (",
-                    sprint(showerror, current), "); replacing it.")
+            unreadable = "$toml binds $entry to a bundle that this NeuralBloch does not read (" *
+                         sprint(showerror, current) * ")"
+            replace_unreadable || return refuse(unreadable, ". Thus, the script cannot check the contract of ",
+                                                "the family. To replace that bundle, use --replace-unreadable.")
+            old = cardversion(installed)
+            old === nothing && return refuse(unreadable, ", and its card gives no semantic [model] version.")
+            new.version > old || return refuse(unreadable, ", and version $(new.version) does not follow ",
+                                               "its version $old.")
+            println(stderr, "Warning: ", unreadable, ". Replacing v$old with v$(new.version). Only the ",
+                    "version is checked, not the readouts, rank, sequence, RF tables, constraint or domain.")
         else
             problems = contract_problems(current, new)
             if !isempty(problems)
