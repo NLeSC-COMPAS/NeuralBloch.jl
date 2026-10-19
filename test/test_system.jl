@@ -135,6 +135,38 @@ tier(:T0, "system: report") do
     @test occursin("TensorRT library", text)
 end
 
+tier(:T0, "system: what detection skips") do
+    # Headers whose NvInferVersion.h has no version: the directory is skipped.
+    mktempdir() do root
+        include = mkpath(joinpath(root, "include"))
+        foreach(f -> write(joinpath(include, f), "no version here"), ("NvInfer.h", "NvOnnxParser.h", "NvInferVersion.h"))
+        withenv("TENSORRT_ROOT" => root) do
+            h = TensorRT.find_headers()
+            @test h === nothing || h.dir != include
+        end
+    end
+
+    @test TensorRT.load_library("libnb-no-such-library", (1, 2)) === nothing
+
+    # g++ on PATH: missing, failing, not saying a version, or correct.
+    mktempdir() do dir
+        gxx = joinpath(dir, "g++")
+        fake(script) = (write(gxx, "#!/bin/sh\n$script\n"); chmod(gxx, 0o755))
+        withenv("PATH" => dir) do
+            @test TensorRT.find_compiler() === nothing
+            fake("exit 1")
+            @test TensorRT.find_compiler() === nothing
+            fake("echo 'clang version 18'")
+            @test TensorRT.find_compiler() === nothing
+            fake("echo 13.3.0")
+            @test TensorRT.find_compiler() == TensorRT.Compiler(gxx, v"13.3.0")
+        end
+    end
+
+    # No package manager knows the package: the hint keeps its placeholder.
+    @test TensorRT.package_cuda(99) === nothing
+end
+
 # TENSORRT_ROOT's libraries come before the system's even when the system
 # has one of a major that is tried first. libc.so.6 stands in for the
 # system's library, a stub libc.so.7 in the prefix for TENSORRT_ROOT's.
@@ -148,6 +180,31 @@ tier(:T1, "system: TENSORRT_ROOT's libraries come first") do
         end
         withenv("TENSORRT_ROOT" => nothing) do
             @test Libdl.dlpath(TensorRT.load_library("libc", (6, 7))) != stub
+        end
+    end
+end
+
+# Stubs under TENSORRT_ROOT for libraries that TensorRT did not build. Each
+# stub has its own directory: the process keeps every library it loads, by
+# path.
+tier(:T1, "system: libraries that are not TensorRT's") do
+    stub(root, code) = run(pipeline(`$(SYSTEM.compiler.path) -shared -fPIC -x c++ - -o
+                                     $(joinpath(mkpath(joinpath(root, "lib")), "libnvinfer.so.10"))
+                                     -Wl,-soname,libnb-stub-$(basename(root)).so`; stdin = IOBuffer(code)))
+    # Without the version functions: detection does not throw, and finds no library.
+    mktempdir() do root
+        stub(root, "")
+        withenv("TENSORRT_ROOT" => root) do
+            @test TensorRT.detect().nvinfer === nothing
+        end
+    end
+    # A version without a build number, and no ONNX parser of that major.
+    mktempdir() do root
+        stub(root, "extern \"C\" int getInferLibVersion() { return 100300; }")
+        withenv("TENSORRT_ROOT" => root) do
+            nvinfer, parser = TensorRT.find_libraries((10,))
+            @test nvinfer == TensorRT.Library(joinpath(root, "lib", "libnvinfer.so.10"), v"10.3.0")
+            @test parser === nothing
         end
     end
 end

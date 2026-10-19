@@ -89,6 +89,8 @@ tier(:T0, "model: malformed cards") do
         (s -> replace(s, "rank = 16" => "rank = 12")) => "states rank 16, but [model] rank is 12",
         (s -> replace(s, "family = \"fisp600-rank16\"" => "family = \"FISP600\"")) => "[model] family \"FISP600\" must be",
         (s -> replace(s, "family = \"fisp600-rank16\"" => "family = \"fisp600-r16\"")) => "exactly one of them rank<N>",
+        (s -> replace(s, "family = \"fisp600-rank16\"" => "family = \"fisp600-rank16-rank8\"")) => "exactly one of them rank<N>",
+        (s -> replace(s, "family = \"fisp600-rank16\"" => "family = 1")) => "[model] family must be a string, not 1",
         (s -> replace(s, r"\nversion = [^\n]*" => "")) => "[model] version is missing",
         (s -> replace(s, version => "version = 1")) => "$semantic, e.g. \"0.1.0-beta.1\", not 1",
         (s -> replace(s, version => "version = \"v0.1.0\"")) => semantic,
@@ -127,7 +129,10 @@ tier(:T0, "model: RF tables must match ntr") do
     mktempdir() do dir
         b = edited_bundle(identity, dir)
         rf = joinpath(b, "rf_data", "rf_phase_list.txt")
-        write(rf, join(readlines(rf)[1:599], '\n'))
+        values = readlines(rf)
+        write(rf, "\n" * join(values, "\n\n") * "\n \n")          # blank lines do not count
+        @test Model(b).sequence.rf_phase == Model().sequence.rf_phase
+        write(rf, join(values[1:599], '\n'))
         err = @test_throws BundleError Model(b)
         @test occursin("rf_phase_list.txt has 599 values; [model] ntr is 600", sprint(showerror, err.value))
         write(rf, "1.0\nnot a number\n")

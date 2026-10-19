@@ -74,6 +74,11 @@ tier(:T0, "predict: model metadata and checkdomain") do
     # An empty batch (a mask with no voxels) has no voxel outside the domain.
     empty = voxels_cpu(0)
     @test checkdomain(m, empty) === empty
+
+    # Vectors that are not floating point: the bounds are compared as they are.
+    @test checkdomain(m, (; B₁ = [1, 1])) isa NamedTuple
+    err = @test_throws ArgumentError checkdomain(m, (; B₁ = [1, 2]))
+    @test occursin("p.B₁ ranges over [1, 2]", sprint(showerror, err.value))
 end
 
 tier(:T0, "predict: Engine refuses bad settings before it looks at the system") do
@@ -391,6 +396,23 @@ tier(:T2, "predict: tf32 reaches the builder of each engine") do
         @test all(A -> all(isfinite, Array(A)), out)
     end
     close(e)
+end
+
+tier(:T2, "predict: the garbage collector releases an engine that is not closed") do
+    # Without a reference, the engine (≈ 480 MiB of TensorRT memory) is
+    # garbage. The finalizers of its handles must release it.
+    function use_and_drop()
+        e = Engine()
+        predict(e, voxels(8))
+        synchronize()
+        return CUDACore.free_memory()
+    end
+    use_and_drop()                                              # warm-up: builds or loads what it needs
+    GC.gc(); GC.gc()
+    free = CUDACore.free_memory()
+    @test use_and_drop() ≤ free - 400 * 2^20                    # the engine held its memory
+    GC.gc(); GC.gc()
+    @test CUDACore.free_memory() ≥ free - 64 * 2^20
 end
 
 tier(:T2, "predict: close") do

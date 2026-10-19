@@ -27,7 +27,8 @@ tier(:T0, "build: needs a GPU") do
     end
 end
 
-tier(:T1, "build: a hung builder is stopped") do
+# T2, not T1: the message for a builder that was killed gives the free GPU memory.
+tier(:T2, "build: a hung builder is stopped") do
     mktempdir() do dir
         # A stand-in for nb-trt-build that never finishes.
         write(joinpath(dir, "hang.cpp"), "#include <unistd.h>\nint main() { for (;;) pause(); }\n")
@@ -48,6 +49,47 @@ tier(:T1, "build: a hung builder is stopped") do
         @test_throws TaskFailedException wait(task)
         sleep(0.5)
         @test !success(pipeline(`pgrep -f $hang`; stdout = devnull))
+    end
+end
+
+tier(:T2, "build: each failure of the builder is explained") do
+    mktempdir() do dir
+        # A stand-in for nb-trt-build: it writes a line to stderr, then exits
+        # with the code in NB_TEST_EXIT, or without it, dies of SIGTERM.
+        write(joinpath(dir, "fail.cpp"), """
+            #include <csignal>
+            #include <cstdio>
+            #include <cstdlib>
+            int main() {
+                std::fputs("the builder's own words\\n", stderr);
+                const char* code = std::getenv("NB_TEST_EXIT");
+                if (!code) std::raise(SIGTERM);
+                return std::atoi(code);
+            }
+            """)
+        run(`g++ -o $(joinpath(dir, "fail")) $(joinpath(dir, "fail.cpp"))`)
+        native = TensorRT.Native(dir, "", joinpath(dir, "fail"), "")
+        gpu = TensorRT.GPU("Some GPU", v"7.5", Base.UUID(0))
+        cases = [  # exit code (nothing: SIGTERM) => words the BuildError must contain
+            1 => "the builder rejected its arguments (a bug in NeuralBloch)",
+            2 => "the ONNX parser rejected the model",
+            3 => "the ONNX does not describe a network NeuralBloch can build",
+            4 => "TensorRT could not build the engine",
+            5 => "the engine could not be written",
+            6 => "TensorRT could not start on the GPU",
+            7 => "the builder hit an unexpected C++ exception",
+            42 => "the builder failed with exit code 42",
+            nothing => "the builder died of signal 15",
+        ]
+        for (code, words) in cases
+            msg = withenv("NB_TEST_EXIT" => code === nothing ? nothing : string(code)) do
+                err = @test_throws BuildError run_builder(native, ONNX, joinpath(dir, "out"), BuildSettings(), gpu)
+                sprint(showerror, err.value)
+            end
+            @test occursin("for Some GPU failed: $words. The builder said:\nthe builder's own words", msg)
+            # TensorRT does not say "out of memory": the message gives the free memory.
+            @test occursin("free GPU memory", msg) == (code in (4, 6, nothing))
+        end
     end
 end
 

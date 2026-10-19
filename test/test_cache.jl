@@ -2,6 +2,7 @@
 
 using NeuralBloch.TensorRT: digest, engine_key, lookup, getorbuild, withlock,
                             read_manifest, write_manifest
+using TOML: TOML
 
 const KEY_FIELDS = (onnx = "3b1645293d530c15f25b8b6b858a3b7fb9ab6e1b8739a40627d8385d516bf607",
                     output = "model.engine",
@@ -149,6 +150,16 @@ tier(:T0, "cache: a damaged entry is rebuilt") do
         @test lookup(root, key) === nothing
         @test getorbuild(build, root, key; what = "x") == dir
         @test builds[] == 2 && read(joinpath(dir, "product"), String) == "complete"
+
+        # A manifest that is not TOML, or that lists no products, is damaged too.
+        manifest = joinpath(dir, "manifest.toml")
+        nofiles = delete!(read_manifest(dir), "files")
+        write(manifest, "key = [")
+        @test lookup(root, key) === nothing
+        open(io -> TOML.print(io, nofiles), manifest, "w")
+        @test lookup(root, key) === nothing
+        @test getorbuild(build, root, key; what = "x") == dir
+        @test builds[] == 3 && lookup(root, key) == dir
     end
 end
 
