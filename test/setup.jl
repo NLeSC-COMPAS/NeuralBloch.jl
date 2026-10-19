@@ -58,12 +58,20 @@ const ONNX = Model().onnx.signal_and_derivatives
 # `edit`(original text), with `version` in place of the original version, and
 # `files`(copy) changes the other files. The files of the artifact are
 # read-only, and cp keeps their mode, thus the test makes the copy writable.
+# An edit that changes nothing is an error: a `replace` that does not find its
+# text would make the test pass without a test of the change.
 function edited_bundle(edit, dir; version = "0.1.0-beta.1", files = identity)
     b = joinpath(dir, "bundle")
     cp(BUNDLE, b)
     chmod(b, 0o755; recursive = true)
     card = joinpath(b, "model_card.toml")
-    write(card, edit(replace(read(card, String), "version = \"0.1.0-beta.1\"" => "version = \"$version\"")))
+    original = read(card, String)
+    line = "version = \"0.1.0-beta.1\""
+    occursin(line, original) || error("edited_bundle: model_card.toml has no line $line")
+    versioned = replace(original, line => "version = \"$version\"")
+    edited = edit(versioned)
+    edit === identity || edited != versioned || error("edited_bundle: the edit changes nothing in model_card.toml")
+    write(card, edited)
     files(b)
     return b
 end
