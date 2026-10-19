@@ -2,7 +2,7 @@
 #
 #     julia --project=scripts scripts/validate.jl
 #
-# Three targets (plan.md, "Definition of done"), each reported PASS or FAIL;
+# Three checks (plan.md, "Definition of done"), each reported PASS or FAIL;
 # the exit code is 1 if any fails:
 #
 #   accuracy  NMAE against the ground truth: the FISP3D EPG simulation of
@@ -26,12 +26,16 @@ using Printf, Statistics
 
 include("reference.jl")
 
-# The NMAE threshold for each output: 1.05 × the value that this set measured,
-# rounded up (dev/NOTES.md). The values are for fisp600-rank16 v1 on
-# 2026-10-15, and the same for 0.1.0-beta.1, which is the same network. A
+# The NMAE thresholds of each model, by family and version: for each output,
+# 1.05 × the value that this set measured, rounded up (dev/NOTES.md). A
 # different build of the same ONNX changes the sixth digit of the NMAE. A real
-# regression changes the second digit.
-const THRESHOLDS = (signal = 0.0128, ∂T₁ = 0.0074, ∂T₂ = 0.0121)
+# regression changes the second digit. The thresholds of one model do not
+# apply to another: for a model without thresholds, the script gives the NMAE
+# and FAIL.
+const THRESHOLDS = Dict(
+    # Measured 2026-10-15 ("The fisp600-rank16 v1 bundle"), the same network as 0.1.0-beta.1
+    ("fisp600-rank16", v"0.1.0-beta.1") => (signal = 0.0128, ∂T₁ = 0.0074, ∂T₂ = 0.0121),
+)
 const LATENCY_TARGET_MS = 1.30 * 1.10                          # at 14400 voxels
 
 function latency(f; n = 50)
@@ -68,11 +72,18 @@ checkdomain(engine, p)
 pred = predict(engine, p)
 t = @elapsed ref = epg(model, v)
 @printf("   %d voxels over the card's training domain; EPG reference in %.1f s\n", N, t)
+thresholds = get(THRESHOLDS, (model.family, model.version), nothing)
 for k in (:signal, :∂T₁, :∂T₂)
     e = nmae(pred[k], ref[k])
-    @printf("   %-7s NMAE %.4f %%   (threshold %.2f %%)   %s\n", k, 100e, 100THRESHOLDS[k],
-            verdict!("accuracy $k", e ≤ THRESHOLDS[k]))
+    if thresholds === nothing
+        @printf("   %-7s NMAE %.4f %%   (no threshold)   %s\n", k, 100e, verdict!("accuracy $k", false))
+    else
+        @printf("   %-7s NMAE %.4f %%   (threshold %.2f %%)   %s\n", k, 100e, 100thresholds[k],
+                verdict!("accuracy $k", e ≤ thresholds[k]))
+    end
 end
+thresholds === nothing && println("   There are no thresholds for $(model.family) v$(model.version). ",
+                                  "Measure the model, examine the NMAE, and add them to THRESHOLDS.")
 
 # --- memory ----------------------------------------------------------------------------
 
@@ -125,6 +136,6 @@ end
 
 close(engine)
 failed = [name for (name, ok) in verdicts if !ok]
-println("\n", isempty(failed) ? "All $(length(verdicts)) targets met." :
+println("\n", isempty(failed) ? "All $(length(verdicts)) checks passed." :
                                "FAILED: " * join(failed, ", "))
 exit(isempty(failed) ? 0 : 1)
