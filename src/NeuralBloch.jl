@@ -1,10 +1,10 @@
 """
     NeuralBloch
 
-GPU inference for the NeuralBloch surrogate of MR fingerprinting signals. The
-package builds TensorRT engines on this machine from hash-pinned ONNX models.
-The engines predict the signal, its T₁ and T₂ derivatives, or its basis
-coefficients directly into GPU memory that the caller owns.
+GPU inference for the NeuralBloch surrogate of MR signals. The package builds
+TensorRT engines on this machine from hash-pinned ONNX models. The engines
+predict the signal, its T₁ and T₂ derivatives, or its basis coefficients
+directly into GPU memory that the caller owns.
 
 The package has two layers:
 

@@ -1,7 +1,7 @@
 # NeuralBloch.jl
 
 NeuralBloch.jl runs the NeuralBloch network on NVIDIA GPUs with TensorRT.
-The network is a surrogate for the FISP3D simulation of MR fingerprinting.
+The network is a surrogate for the simulation of MR signals.
 From T₁, T₂ and B₁ of each voxel, it predicts the signal and its derivatives
 with respect to T₁ and T₂, the signal alone, or the signal's coefficients in
 the network's low-rank basis. Each comes from its own TensorRT engine, which
