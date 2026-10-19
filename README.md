@@ -203,43 +203,95 @@ julia --project -e 'using Pkg; Pkg.test()'
 The tests skip the parts that the machine cannot run, for example the GPU
 tests. Set `NEURALBLOCH_TEST_ALL=1` to make each skip a failure.
 
-A new model comes from NeuralBloch. `uv run run.py export_bundle` writes the
-bundle and its release file, `outputs/neuralbloch-model-<family>-v<version>.tar.gz`.
-Bind that file as the artifact of this package for its family:
+### Adopt a new model
 
-```sh
-julia --project dev/bind_bundle.jl /path/to/NeuralBloch/outputs/neuralbloch-model-fisp600-rank16-v0.1.0-beta.2.tar.gz
-```
+NeuralBloch publishes each model as a release with the tag
+`model-<family>-v<version>`. The release has one file:
+`neuralbloch-model-<family>-v<version>.tar.gz`. This package uses only the
+model that `Artifacts.toml` binds. A new release does not change this package.
 
-The script installs the file with Pkg from its local path. Pkg unpacks the
-file and checks its hashes, as after a download. The script then writes the
-entry of the family in `Artifacts.toml`: the release URL, the sha256 of the
-file and its tree hash.
+To adopt a new model, do these steps:
 
-A later version of the same family must keep the contract of the family:
+1. Download the release file. For example, for `fisp600-rank16` version
+   0.1.0-beta.2:
 
-- the same readouts, rank, sequence and RF tables,
-- a training domain that is the same or larger,
-- a higher [semantic version](https://semver.org), for example 0.1.0-beta.1,
-  then 0.1.0-beta.2, then 0.1.0.
+   ```sh
+   curl -LO https://github.com/NLeSC-COMPAS/NeuralBloch/releases/download/model-fisp600-rank16-v0.1.0-beta.2/neuralbloch-model-fisp600-rank16-v0.1.0-beta.2.tar.gz
+   ```
 
-If the new version does not keep the contract, the script changes nothing and
-lists the differences. In a family, the parts of the version have these
-meanings:
+   If the release is not available, use the file in `outputs/` of
+   NeuralBloch. The task `uv run run.py export_bundle` writes this file.
 
-- PATCH: a new export of the same weights.
+2. Bind the file:
+
+   ```sh
+   julia --project dev/bind_bundle.jl neuralbloch-model-fisp600-rank16-v0.1.0-beta.2.tar.gz
+   ```
+
+   The script installs the file with Pkg and checks its two hashes. Then it
+   writes the entry of the family in `Artifacts.toml`. If the file does not
+   obey the rules in [Versions and families](#versions-and-families), the
+   script does not change `Artifacts.toml`.
+
+3. Update the values that change with the model:
+
+   | File | Values |
+   |---|---|
+   | `test/test_model.jl` | Version, ONNX hashes, domain, and `upstream` (the NeuralBloch commit) |
+   | `test/test_predict.jl` | Domain |
+   | `test/test_accuracy.jl`, `scripts/validate.jl` | Accuracy bounds. First, measure the model with `scripts/validate.jl`. |
+   | `README.md` | Version, domain, release link, and "Accuracy and speed" |
+   | `dev/NOTES.md` | A record of the model, its file and its measurements |
+
+4. Run the tests with `NEURALBLOCH_TEST_ALL=1`. Then run `scripts/validate.jl`.
+
+5. If the release is not available, publish the file without changes. Refer
+   to "Publish a model release" in the README of NeuralBloch. Before you
+   upload the file, make sure that its sha256 is the same as the sha256 in
+   `Artifacts.toml`.
+
+   CAUTION: Do not run `export_bundle` again after step 2. A new export writes
+   a different file.
+
+6. Push the commits after the release is available. Before that time, users
+   and the CI cannot install a commit that binds the file.
+
+### Versions and families
+
+A family is a contract for callers. A new version of a family must obey these
+rules:
+
+- The readouts, rank, sequence and RF tables do not change.
+- The training domain is the same or larger.
+- The [semantic version](https://semver.org) is higher, for example
+  0.1.0-beta.1, then 0.1.0-beta.2, then 0.1.0.
+
+The parts of the version have these meanings:
+
+- PATCH: the same weights, with a new export.
 - MINOR: new weights or a larger domain.
 - MAJOR: 0 until the family is stable.
 
-Then do these steps:
+A model with different readouts, rank or sequence is a new family.
+`bind_bundle.jl` adds a new entry for this family, but `Model()` continues to
+read `fisp600-rank16`. To change the default family, change the default of
+`Model` in `src/model.jl` (`artifact"neuralbloch_<family>"`). Then update the
+tests and this README.
 
-1. Update the values that the tests and `scripts/validate.jl` pin. These are
-   the values of the card, for example the version, the hashes and the domain
-   (`test/test_model.jl`, `test/test_predict.jl`), and the accuracy of the
-   model (`test/test_accuracy.jl`, the thresholds in `scripts/validate.jl`).
-   Run the tests and the script.
-2. Publish the file, without changes, as the NeuralBloch release
-   `model-<family>-v<version>` (see "Publish a model release" in the README
-   of NeuralBloch).
-3. Push the commits. Before the release exists, nobody can install a commit
-   that binds it. This also applies to the CI.
+CAUTION: Do not remove or replace the file of a published release. Each
+commit that binds the file downloads it. To correct a model, publish a new
+version.
+
+`bind_bundle.jl` does not bind a second file to a version that
+`Artifacts.toml` binds. This rule protects the published versions. To replace
+the file of a version that is not published, do these steps:
+
+1. Bind the new file into an empty file:
+
+   ```sh
+   rm -f /tmp/Artifacts.toml
+   julia --project dev/bind_bundle.jl /path/to/the-new-file.tar.gz /tmp/Artifacts.toml
+   ```
+
+2. In `Artifacts.toml`, replace the entry of the family with the entry from
+   `/tmp/Artifacts.toml`.
