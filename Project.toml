@@ -4,6 +4,7 @@ authors = ["Cunliang Geng <c.geng@esciencecenter.nl>"]
 version = "0.1.0"
 
 [deps]
+Artifacts = "56f22d72-fd6d-98f1-02f0-08ddc0907c33"
 CUDACore = "bd0ed864-bdfe-4181-a5ed-ce625a5fdea2"
 FileWatching = "7b1f6079-737a-58dc-b8bc-7a2ca5c1b5ee"
 Libdl = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
@@ -12,6 +13,7 @@ Scratch = "6c6a2e73-6563-6170-7368-637461726353"
 TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 
 [compat]
+Artifacts = "1"
 CUDACore = "6"
 FileWatching = "1"
 Libdl = "1"

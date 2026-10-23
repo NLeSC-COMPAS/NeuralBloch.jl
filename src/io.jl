@@ -1,32 +1,44 @@
-# L2: the I/O contract between callers and the model's engine, checked before
-# TensorRT sees anything; and the only place where the card's ASCII names
-# (T1, dT1, …) meet the public Unicode ones (T₁, ∂T₁, …).
+# L2: the I/O contract between the callers and the engines of the model. The
+# package checks it before TensorRT gets the data. This file is also the only
+# location where the ASCII names of the card (T1, dT1, …) and the public
+# Unicode names (T₁, ∂T₁, …) meet.
 #
-# The contract is what this package requires of the engine's tensors, copied
-# from the upstream model (src/model.py): one input and three outputs, no
-# others, all Float32. Shapes are in TensorRT's row-major order, -1 being the
-# dynamic batch; NTR (readouts per voxel) comes from the model card.
-#   x       input,  (batch, 3): per voxel [T₁, T₂, B₁] in physical units (the
-#           network takes the log of T₁ and T₂ itself);
-#   signal  output, (batch, NTR, 2): (Re, Im) on the last axis;
-#   dT1     output, (batch, NTR, 2): ∂signal/∂T₁ per second;
-#   dT2     output, (batch, NTR, 2): ∂signal/∂T₂ per second.
+# The contract gives the tensors that this package requires of the engine of
+# each target. It is a copy of the upstream model (src/model.py, TARGETS in
+# scripts/export_onnx.py): one input and the outputs of the target, no other
+# tensors, all Float32. The shapes are in the row-major order of TensorRT. -1
+# is the dynamic batch. NTR (readouts for each voxel) and the rank (basis
+# coefficients for each voxel) come from the model card.
+#   x             input,  (batch, 3): for each voxel [T₁, T₂, B₁] in physical
+#                 units (the network calculates the log of T₁ and T₂);
+#   signal        output, (batch, NTR, 2): (Re, Im) on the last axis;
+#   dT1           output, (batch, NTR, 2): ∂signal/∂T₁ per second;
+#   dT2           output, (batch, NTR, 2): ∂signal/∂T₂ per second;
+#   coefficients  output, (batch, rank): the basis coefficients of the signal.
+# signal_and_derivatives has signal, dT1 and dT2. signal has signal.
+# coefficients has coefficients.
 #
-# The engine file records its own tensors (names, dtypes, shapes) but not which
-# model they belong to. `resolve_io` compares them with the contract, once, when
-# an Engine is built, and returns where each tensor is.
+# The engine file records its tensors (names, dtypes, shapes), but not the
+# model that they come from. `Engine` calls `resolve_io` one time for each
+# target, when it opens the engine. `resolve_io` compares the tensors with the
+# contract and returns the location of each tensor.
 #
-# Why Float32 and these shapes: TensorRT's row-major (batch, 3) is Julia's
-# column-major (3, batch), and a row-major (batch, NTR, 2) Float32 tensor is
-# byte for byte a column-major (NTR, batch) ComplexF32 matrix, so inputs and
-# outputs cross without copies.
+# The reason for Float32 and these shapes: the row-major (batch, 3) of TensorRT
+# is the column-major (3, batch) of Julia. A row-major (batch, NTR, 2) Float32
+# tensor has the same bytes as a column-major (NTR, batch) ComplexF32 matrix. A
+# row-major (batch, rank) tensor has the same bytes as a column-major (rank,
+# batch) Float32 matrix. Thus, the outputs go across without copies. The input
+# x is a (3, max) buffer of the engine: `stage!` fills it with three strided
+# copies of p.T₁, p.T₂ and p.B₁.
 
-const NAMES = ("T1" => :T₁, "T2" => :T₂, "B1" => :B₁, "signal" => :signal, "dT1" => :∂T₁, "dT2" => :∂T₂)
+const NAMES = ("T1" => :T₁, "T2" => :T₂, "B1" => :B₁, "signal" => :signal, "dT1" => :∂T₁, "dT2" => :∂T₂,
+               "coefficients" => :coefficients)
 
 """
     publicname(ascii) -> Symbol
 
-The public (Unicode) name of a card or engine name: `"dT1"` → `:∂T₁`.
+The public (Unicode) name for a name of the card or of an engine:
+`"dT1"` → `:∂T₁`.
 """
 function publicname(ascii::AbstractString)
     i = findfirst(p -> p.first == ascii, NAMES)
@@ -37,7 +49,7 @@ end
 """
     cardname(name::Symbol) -> String
 
-The card's (ASCII) name for a public name: `:∂T₁` → `"dT1"`.
+The (ASCII) name of the card for a public name: `:∂T₁` → `"dT1"`.
 """
 function cardname(name::Symbol)
     i = findfirst(p -> p.second === name, NAMES)
@@ -47,37 +59,49 @@ end
 
 const INPUT = "x"
 const FEATURES = (:T₁, :T₂, :B₁)                   # the rows of x, in order
-const OUTPUTS = ("signal", "dT1", "dT2")
+
+# The outputs of each target, with their names in the engine.
+const OUTPUTS = (signal_and_derivatives = ("signal", "dT1", "dT2"), signal = ("signal",),
+                 coefficients = ("coefficients",))
 
 """
-    resolve_io(tensors, ntr) -> (; x, signal, ∂T₁, ∂T₂)
+    resolve_io(tensors, target; ntr, rank) -> (; x, outputs...)
 
-Check the engine's I/O against the contract and say where each tensor is.
-`tensors` is what the engine reports about itself (`TensorRT.tensors`),
-`ntr` the readouts per voxel from the model card.
+Check the engine I/O of one target against the contract, and return the
+location of each tensor. `tensors` is what the engine tells about itself
+(`TensorRT.tensors`). `target` is `:signal_and_derivatives`, `:signal` or
+`:coefficients`. `ntr` and `rank` are the readouts and the basis coefficients
+for each voxel, from the model card.
 
-The contract: exactly these tensors, all Float32, shapes in TensorRT's
-row-major order (-1 is the dynamic batch):
+The contract: only the input `x` and the outputs of the target, all Float32.
+The shapes are in the row-major order of TensorRT (-1 is the dynamic batch):
 
-| tensor   | direction | shape          | meaning                         |
-|:---------|:----------|:---------------|:--------------------------------|
-| `x`      | input     | `(-1, 3)`      | per voxel `[T₁, T₂, B₁]`        |
-| `signal` | output    | `(-1, ntr, 2)` | (Re, Im) per readout            |
-| `dT1`    | output    | `(-1, ntr, 2)` | ∂signal/∂T₁ per second          |
-| `dT2`    | output    | `(-1, ntr, 2)` | ∂signal/∂T₂ per second          |
+| tensor         | direction | shape          | meaning                    | in the targets                       |
+|:---------------|:----------|:---------------|:---------------------------|:-------------------------------------|
+| `x`            | input     | `(-1, 3)`      | `[T₁, T₂, B₁]` of a voxel  | all                                  |
+| `signal`       | output    | `(-1, ntr, 2)` | (Re, Im) per readout       | `signal_and_derivatives`, `signal`   |
+| `dT1`          | output    | `(-1, ntr, 2)` | ∂signal/∂T₁ per second     | `signal_and_derivatives`             |
+| `dT2`          | output    | `(-1, ntr, 2)` | ∂signal/∂T₂ per second     | `signal_and_derivatives`             |
+| `coefficients` | output    | `(-1, rank)`   | basis coefficients of the signal | `coefficients`                 |
 
-Returns the 0-based TensorRT index of `x` and of each output, keyed by public
-name (`dT1` is `∂T₁`). Tensors are found by name, not by position, so the
-result is right whatever order the ONNX lists them in.
+Returns the 0-based TensorRT index of `x` and of each output of the target,
+with the public names as keys (`dT1` is `∂T₁`). The function finds the
+tensors by name, not by position. Thus, the order of the tensors in the ONNX
+file has no effect.
 
-Anything that deviates from the contract (a missing, extra or misnamed
-tensor, a dtype other than Float32, a different shape) is a
-[`BundleError`](@ref): the ONNX is not the one the model card describes.
+A difference from the contract causes a [`BundleError`](@ref): the ONNX file
+is not the file that the model card describes. Examples are a missing, extra
+or incorrectly named tensor, a dtype that is not Float32, or a different
+shape.
 """
-function resolve_io(tensors::AbstractVector{TensorRT.TensorInfo}, ntr::Integer)
-    expected = "one input x, Float32 (batch, 3) = [T₁, T₂, B₁] per voxel, and outputs signal, dT1 " *
-               "and dT2, Float32 (batch, $ntr, 2)"
-    bad(what) = throw(BundleError("the engine does not match the model card: $what; expected $expected"))
+function resolve_io(tensors::AbstractVector{TensorRT.TensorInfo}, target::Symbol; ntr::Integer, rank::Integer)
+    rows, E = outputlayout(target, ntr, rank)
+    outputs = OUTPUTS[target]
+    outshape = E <: Complex ? [-1, rows, 2] : [-1, rows]     # TensorRT has no complex type: (Re, Im) last
+    listing = length(outputs) == 1 ? "output $(only(outputs))" : "outputs " * join(outputs, ", ", " and ")
+    expected = "one input x, Float32 (batch, 3) = [T₁, T₂, B₁] per voxel, and $listing, Float32 " *
+               "(batch, $(join(outshape[2:end], ", ")))"
+    bad(what) = throw(BundleError("the $target engine does not match the model card: $what; expected $expected"))
     index(name, input) = findfirst(t -> t.name == name && t.input == input, tensors)
     function check(i, name, shape)
         t = tensors[i]
@@ -88,15 +112,15 @@ function resolve_io(tensors::AbstractVector{TensorRT.TensorInfo}, ntr::Integer)
 
     x = index(INPUT, true)
     x === nothing && bad("no input $INPUT")
-    outs = map(name -> index(name, false), OUTPUTS)
-    for (name, o) in zip(OUTPUTS, outs)
+    outs = map(name -> index(name, false), outputs)
+    for (name, o) in zip(outputs, outs)
         o === nothing && bad("no output $name")
     end
     for t in tensors
-        (t.name == INPUT || t.name in OUTPUTS) || bad("unexpected tensor $(t.name)")
+        (t.name == INPUT || t.name in outputs) || bad("unexpected tensor $(t.name)")
     end
-    return (x = check(x, INPUT, [-1, 3]), signal = check(outs[1], "signal", [-1, ntr, 2]),
-            ∂T₁ = check(outs[2], "dT1", [-1, ntr, 2]), ∂T₂ = check(outs[3], "dT2", [-1, ntr, 2]))
+    indices = map((name, o) -> check(o, name, outshape), outputs, outs)
+    return NamedTuple{(:x, map(publicname, outputs)...)}((check(x, INPUT, [-1, 3]), indices...))
 end
 
 # --- inputs ------------------------------------------------------------------------
@@ -104,8 +128,8 @@ end
 """
     input_problem(T) -> Union{Nothing,String}
 
-`nothing` when vectors of type `T` can be inputs, otherwise what is wrong.
-Any strided GPU vector of Float32 will do, views with a range included:
+Return `nothing` if vectors of type `T` can be inputs, otherwise the problem.
+All strided GPU vectors of Float32 are applicable, also views with a range:
 predict! copies them with strided copies.
 """
 input_problem(::Type{<:CUDACore.StridedCuVector{Float32}}) = nothing
@@ -118,9 +142,10 @@ input_problem(::Type{T}) where {T} = "a $T, not an array; inputs must be GPU vec
 """
     checkinputs(p) -> N
 
-The number of voxels in `p`, after checking the contract: properties `T₁`,
-`T₂`, `B₁` holding strided GPU vectors of Float32 (positive stride) of equal
-length. Otherwise an `ArgumentError`.
+Check `p` against the contract, and return the number of voxels in `p`. The
+contract: the properties `T₁`, `T₂` and `B₁` are strided GPU vectors of
+Float32 (positive stride) with the same length. If not, the function throws an
+`ArgumentError`.
 """
 function checkinputs(p)
     for name in FEATURES
@@ -143,17 +168,28 @@ function checkinputs(p)
 end
 
 """
-    batch_problem(batch, ntr, N) -> Union{Nothing,String}
+    alignment(rows, T) -> Int
 
-`nothing` when an engine accepting `batch = (; min, opt, max)` voxels per
-call can take `N` voxels (0 is nothing to do), otherwise what to do instead.
+The smallest number of columns of a `CuMatrix{T}` with `rows` rows (one
+voxel in each column) whose size is a multiple of 256 bytes. If `j - 1` is a
+multiple of this number, a column view `A[:, j:k]` starts at a 256-byte
+alignment, as TensorRT requires (dev/NOTES.md, S6).
 """
-function batch_problem(batch::NamedTuple, ntr::Integer, N::Integer)
+alignment(rows::Integer, ::Type{T}) where {T} = 256 ÷ gcd(256, rows * sizeof(T))
+
+"""
+    batch_problem(batch, N, step) -> Union{Nothing,String}
+
+Return `nothing` if an engine for `batch = (; min, opt, max)` voxels in each
+call can accept `N` voxels (if `N` is 0, there is nothing to do). Otherwise,
+return what to do. `step` is the [`alignment`](@ref) of the outputs, for the
+advice about chunks.
+"""
+function batch_problem(batch::NamedTuple, N::Integer, step::Integer)
     (N == 0 || batch.min ≤ N ≤ batch.max) && return nothing
     what = "a batch of $N voxels is outside this engine's range, $(batch.min) to $(batch.max) voxels. "
     N < batch.min && return what * "Use an engine built for smaller batches: " *
                             "Engine(model; batch = (min, opt, max)) with min ≤ $N."
-    step = 256 ÷ gcd(256, ntr * sizeof(ComplexF32))
     return what * "Split it into chunks (column views of the outputs; chunk boundaries at multiples of " *
            "$step voxels keep them aligned), or use an engine built for it: " *
            "Engine(model; batch = (min, opt, max)) with max ≥ $N."
@@ -162,38 +198,40 @@ end
 # --- outputs -----------------------------------------------------------------------
 
 """
-    output_problem(T) -> Union{Nothing,String}
+    output_problem(T, E) -> Union{Nothing,String}
 
-`nothing` when arrays of type `T` can be outputs, otherwise what is wrong:
-outputs are dense `CuMatrix{ComplexF32}` (TensorRT writes them in place).
+Return `nothing` if arrays of type `T` can be outputs of element type `E`,
+otherwise the problem. Outputs are dense `CuMatrix{E}`, because TensorRT
+writes into them directly. `E` is `ComplexF32` for the signal and its
+derivatives, and `Float32` for the coefficients.
 """
-output_problem(::Type{<:CuArray{ComplexF32,2}}) = nothing
-output_problem(::Type{T}) where {T<:CuArray} = "a $T; outputs must be CuMatrix{ComplexF32}"
-output_problem(::Type{T}) where {T<:Array} = "a $T in CPU memory; outputs must be CuMatrix{ComplexF32} on the GPU"
-output_problem(::Type{T}) where {T<:AbstractArray} =
-    "a $T; outputs must be dense CuMatrix{ComplexF32}: contiguous GPU memory"
-output_problem(::Type{T}) where {T} = "a $T, not an array; outputs must be CuMatrix{ComplexF32}"
+output_problem(::Type{<:CuArray{E,2}}, ::Type{E}) where {E} = nothing
+output_problem(::Type{T}, ::Type{E}) where {T<:CuArray,E} = "a $T; outputs must be CuMatrix{$E}"
+output_problem(::Type{T}, ::Type{E}) where {T<:Array,E} = "a $T in CPU memory; outputs must be CuMatrix{$E} on the GPU"
+output_problem(::Type{T}, ::Type{E}) where {T<:AbstractArray,E} =
+    "a $T; outputs must be dense CuMatrix{$E}: contiguous GPU memory"
+output_problem(::Type{T}, ::Type{E}) where {T,E} = "a $T, not an array; outputs must be CuMatrix{$E}"
 
 """
-    layout_problem(size, address, ntr, N) -> Union{Nothing,String}
+    layout_problem(size, address, rows, N, E) -> Union{Nothing,String}
 
-`nothing` when an output of `size` at device `address` suits a batch of `N`
-voxels, otherwise what is wrong: the size must be `(ntr, N)`, and the
-address a multiple of 256 bytes, as TensorRT requires (dev/NOTES.md, S6).
+Return `nothing` if an output of element type `E`, with `size`, at device
+`address`, is applicable to a batch of `N` voxels. Otherwise, return the
+problem. The size must be `(rows, N)`. The address must be a multiple of 256
+bytes, as TensorRT requires (dev/NOTES.md, S6).
 """
-function layout_problem(size::Tuple{Int,Int}, address::UInt, ntr::Integer, N::Integer)
-    size == (ntr, N) || return "of size $size; a batch of $N voxels needs ($ntr, $N)"
+function layout_problem(size::Tuple{Int,Int}, address::UInt, rows::Integer, N::Integer, ::Type{E}) where {E}
+    size == (rows, N) || return "of size $size; a batch of $N voxels needs ($rows, $N)"
     address % 256 == 0 && return nothing
-    step = 256 ÷ gcd(256, ntr * sizeof(ComplexF32))
     return "not aligned to 256 bytes, as TensorRT requires. Whole CuArrays are; a column view " *
-           "A[:, j:k] of a CuMatrix{ComplexF32} with $ntr rows is when j - 1 is a multiple of $step"
+           "A[:, j:k] of a CuMatrix{$E} with $rows rows is when j - 1 is a multiple of $(alignment(rows, E))"
 end
 
 """
     overlap_problem(names, addresses, nbytes) -> Union{Nothing,String}
 
-`nothing` when outputs of `nbytes` each, at `addresses`, do not overlap;
-otherwise which two do.
+Return `nothing` if the outputs at `addresses`, each with `nbytes`, do not
+overlap. Otherwise, return the two outputs that overlap.
 """
 function overlap_problem(names::Tuple, addresses::Tuple, nbytes::Integer)
     for i in eachindex(addresses), j in i+1:lastindex(addresses)
@@ -204,34 +242,60 @@ function overlap_problem(names::Tuple, addresses::Tuple, nbytes::Integer)
     return nothing
 end
 
-# (; signal) or (; signal, ∂T₁, ∂T₂), in any order.
-outputkeys_ok(keys::Tuple) =
-    keys === (:signal,) || (length(keys) == 3 && :signal in keys && :∂T₁ in keys && :∂T₂ in keys)
+const OUTPUT_SETS = "(; signal, ∂T₁, ∂T₂) in any order, (; signal) or (; coefficients)"
+
+"""
+    targetof(out) -> Symbol
+
+The target whose engine calculates the output set `out`: the signal and its
+derivatives (in any order), the signal alone, or the coefficients. If `out` is
+not one of these sets, the function throws an `ArgumentError`. The keys of
+`out`, which are part of its type, give the result. Thus, Julia can calculate
+the target, the engine and the layout of a `predict!` call at compile time
+(the test "no allocations after warm-up" shows it).
+"""
+targetof(::NamedTuple{(:signal,)}) = :signal
+targetof(::NamedTuple{(:coefficients,)}) = :coefficients
+function targetof(out::NamedTuple)
+    names = keys(out)
+    length(names) == 3 && :signal in names && :∂T₁ in names && :∂T₂ in names && return :signal_and_derivatives
+    throw(ArgumentError("out must be $OUTPUT_SETS, not a NamedTuple with keys $names"))
+end
+targetof(out) = throw(ArgumentError("out must be a NamedTuple, $OUTPUT_SETS, not a $(typeof(out))"))
+
+"""
+    outputlayout(target, ntr, rank) -> (rows, E)
+
+The rows and the element type of each output of `target`: `(ntr, ComplexF32)`
+for the signal and its derivatives, and `(rank, Float32)` for the
+coefficients.
+"""
+function outputlayout(target::Symbol, ntr::Integer, rank::Integer)
+    checktarget(target)
+    return target === :coefficients ? (Int(rank), Float32) : (Int(ntr), ComplexF32)
+end
 
 address(A::CuArray) = UInt(pointer(A))
 
 """
-    checkoutputs(out, ntr, N)
+    checkoutputs(out, N, rows, E)
 
-Check `out` against the contract for a batch of `N` voxels: a NamedTuple
-`(; signal)` or `(; signal, ∂T₁, ∂T₂)` of dense `(ntr, N)`
-`CuMatrix{ComplexF32}`s, 256-byte aligned, not overlapping. Otherwise an
-`ArgumentError` saying what to change.
+Check the output set `out` ([`targetof`](@ref)) against the contract for a
+batch of `N` voxels. The contract: dense `CuMatrix{E}`s of size `(rows, N)`
+(the [`outputlayout`](@ref) of the target), at a 256-byte alignment, with no
+overlap. If not, the function throws an `ArgumentError` that tells what to
+change.
 """
-function checkoutputs(out::NamedTuple, ntr::Integer, N::Integer)
-    outputkeys_ok(keys(out)) || throw(ArgumentError(
-        "out must be (; signal) or (; signal, ∂T₁, ∂T₂), in any order, not a NamedTuple with keys $(keys(out))"))
+function checkoutputs(out::NamedTuple, N::Integer, rows::Integer, ::Type{E}) where {E}
     map(keys(out), values(out)) do name, A
-        problem = output_problem(typeof(A))
+        problem = output_problem(typeof(A), E)
         problem === nothing || throw(ArgumentError("out.$name is $problem"))
-        problem = layout_problem(size(A), address(A), ntr, N)
+        problem = layout_problem(size(A), address(A), rows, N, E)
         problem === nothing || throw(ArgumentError("out.$name is $problem"))
     end
-    # (A name of its own: reassigning a variable the closure above uses would box it.)
-    overlap = overlap_problem(keys(out), map(address, values(out)), ntr * N * sizeof(ComplexF32))
+    # Use a new name. If this line assigned `problem`, the closure above would
+    # capture a variable that changes, and Julia would box it.
+    overlap = overlap_problem(keys(out), map(address, values(out)), rows * N * sizeof(E))
     overlap === nothing || throw(ArgumentError(overlap))
     return nothing
 end
-
-checkoutputs(out, ntr, N) = throw(ArgumentError(
-    "out must be a NamedTuple, (; signal) or (; signal, ∂T₁, ∂T₂), not a $(typeof(out))"))

@@ -1,31 +1,37 @@
-# The ground truth the scripts compare against: BlochSimulators 0.9's FISP3D
-# EPG simulation with forward-difference derivatives, the generator of the
-# training data, on the training sequence as the model card describes it.
-# Included by scripts/validate.jl and dev/compare_mrstat.jl.
+# The ground truth to compare with: the FISP3D EPG simulation of
+# BlochSimulators. This simulation made the training data. The derivative
+# method, the sequence and the training domain come from the model card.
+# scripts/validate.jl, scripts/golden.jl and dev/compare_mrstat.jl include
+# this file.
 
-using NeuralBloch: Model, sequence
+using NeuralBloch: Model, domain, sequence
 using BlochSimulators: BlochSimulators, FISP3D, @parameters, gpu, f32, simulate_magnetization,
-                       simulate_derivatives_finite_difference
+                       simulate_derivatives_finite_difference, simulate_derivatives_forward_sensitivity
 using ComputationalResources: CUDALibs
 using CUDACore: CuArray
-using Random: Random
+using Random: Xoshiro
 
-# MRSTAT.jl's evaluation set (scripts/validate_tensorrt.jl): T₁ and T₂
-# log-uniform over the training ranges, T₂ capped at 0.8 T₁, B₁ uniform.
-# Float64, as the reference simulates it.
-function evaluation_set(n = 14400; seed = 20260826)
-    Random.seed!(seed)
-    T₁ = exp.(rand(n) .* (log(5.0) - log(0.1)) .+ log(0.1))
-    T₂ = min.(exp.(rand(n) .* (log(2.0) - log(0.01)) .+ log(0.01)), 0.8 .* T₁)
-    B₁ = 0.8 .+ 0.4 .* rand(n)
+# A set of voxels in the training domain of the card. T₁ and T₂ are
+# log-uniform and B₁ is uniform, as upstream. Upstream drops the voxels with
+# T₂ ≥ T₁. This set instead limits T₂ to 0.8 T₁, as the evaluation set of
+# MRSTAT.jl does: T₂ < T₁ in the domain. The values are Float64, as the reference
+# uses. Xoshiro(seed) gives the same values as Random.seed!(seed). Thus, on the
+# domain of the 2026-10-01 card (T₁ 0.1–5 s, B₁ 0.8–1.2), the default set is
+# the evaluation set of MRSTAT.jl (scripts/validate_tensorrt.jl).
+function evaluation_set(model::Model, n = 14400; seed = 20260826)
+    rng = Xoshiro(seed)
+    (T₁lo, T₁hi), (T₂lo, T₂hi), (B₁lo, B₁hi) = domain(model)
+    T₁ = exp.(rand(rng, n) .* (log(T₁hi) - log(T₁lo)) .+ log(T₁lo))
+    T₂ = min.(exp.(rand(rng, n) .* (log(T₂hi) - log(T₂lo)) .+ log(T₂lo)), 0.8 .* T₁)
+    B₁ = B₁lo .+ (B₁hi - B₁lo) .* rand(rng, n)
     return (; T₁, T₂, B₁)
 end
 
 gpu_voxels(v) = map(x -> CuArray(Float32.(x)), v)
 
-# Signal and derivatives for the voxels `v`, simulated as upstream generated
-# the training data (data/data_generation.jl): on the GPU in Float32, with
-# the card's forward-difference steps.
+# The signal and its derivatives for the voxels `v`. The simulation is the same
+# as the one that made the training data upstream (data/data_generation.jl):
+# on the GPU, in Float32, with the derivative method of the card.
 function epg(model::Model, v)
     s = sequence(model)
     rf = s.rf_angle .* exp.(im .* deg2rad.(s.rf_phase))        # degrees, phases in radians
@@ -34,13 +40,19 @@ function epg(model::Model, v)
     T₁, T₂, B₁ = v.T₁, v.T₂, v.B₁
     parameters = gpu(f32(@parameters T₁ T₂ B₁))
     seq = gpu(f32(fisp))
-    echos = simulate_magnetization(CUDALibs(), seq, parameters)
     d = model.derivatives
-    d.method == "forward difference" || error("the reference implements forward differences, the card says $(d.method)")
-    steps = BlochSimulators.T₁T₂B₁B₀(d.dT1_step, d.dT2_step, BlochSimulators.DEFAULT_ΔB₁, BlochSimulators.DEFAULT_ΔB₀)
-    ∂ = simulate_derivatives_finite_difference((:T₁, :T₂), echos, seq, parameters, steps)
+    if d.method == "forward sensitivity"
+        echos, ∂ = simulate_derivatives_forward_sensitivity((:T₁, :T₂), seq, parameters)
+    elseif d.method == "forward difference"
+        echos = simulate_magnetization(CUDALibs(), seq, parameters)
+        steps = BlochSimulators.T₁T₂B₁B₀(d.dT1_step, d.dT2_step, BlochSimulators.DEFAULT_ΔB₁,
+                                         BlochSimulators.DEFAULT_ΔB₀)
+        ∂ = simulate_derivatives_finite_difference((:T₁, :T₂), echos, seq, parameters, steps)
+    else
+        error("epg does not know the derivative method $(repr(d.method)) of the card")
+    end
     return (signal = echos, ∂T₁ = ∂.T₁, ∂T₂ = ∂.T₂)
 end
 
-# Normalized mean absolute error, in Float64 on the CPU.
+# The normalized mean absolute error, in Float64 on the CPU.
 nmae(pred, ref) = (a = ComplexF64.(Array(pred)); b = ComplexF64.(Array(ref)); sum(abs, a .- b) / sum(abs, b))

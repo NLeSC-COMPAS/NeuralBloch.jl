@@ -74,6 +74,19 @@ tier(:T2, "engine: batches outside the profile") do
     close(h)
 end
 
+tier(:T2, "engine: TensorRT's refusals reach the user") do
+    h = Handle(build(ONNX))
+    X = inputs(10)
+    err = @test_throws TensorRTError set_address!(h, length(tensors(h)), devptr(X))
+    @test occursin("rejected the address of an invalid tensor index", sprint(showerror, err.value))
+    set_shape!(h, tensorindex(h, "x"), (10, 3))
+    err = @test_throws TensorRTError run!(h)                   # no address set
+    msg = sprint(showerror, err.value)
+    @test occursin("could not enqueue the engine", msg)
+    @test occursin("Address is not set for input tensor x", msg)  # TensorRT's own words
+    close(h)
+end
+
 tier(:T2, "engine: runs, closes, coexists") do
     path = build(ONNX)
     h1, h2 = Handle(path), Handle(path)                    # two coexist

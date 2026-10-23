@@ -1,6 +1,7 @@
 # system.jl: finding TensorRT, the headers, g++ and the GPU.
 
 using Libdl: Libdl
+using Pkg.Artifacts: artifact_hash
 
 tier(:T0, "system: parsing") do
     trt11 = """
@@ -126,7 +127,62 @@ tier(:T0, "system: report") do
     # detect() never throws, whatever the machine.
     @test TensorRT.detect() isa TensorRT.System
     @test NeuralBloch.functional() isa Bool
-    @test occursin("TensorRT", sprint(NeuralBloch.versioninfo))
+
+    # The report of the package: the model, the cache, then the system.
+    text = sprint(NeuralBloch.versioninfo)
+    @test startswith(text, "NeuralBloch $(pkgversion(NeuralBloch))\n")
+    @test occursin("\n  model: fisp600-rank16 v0.1.0-beta.1 in $BUNDLE (NTR 600, rank 16, NeuralBloch@", text)
+    @test occursin("\n  cache: $(TensorRT.cache_root())\n", text)
+    @test occursin("TensorRT library", text)
+end
+
+tier(:T0, "system: the report without the model") do
+    # An Overrides.toml in a depot before the others moves the artifact to a
+    # directory that does not exist: the model is not installed.
+    mktempdir() do depot
+        tree = artifact_hash("neuralbloch_fisp600_rank16", joinpath(pkgdir(NeuralBloch), "Artifacts.toml"))
+        write(joinpath(mkpath(joinpath(depot, "artifacts")), "Overrides.toml"),
+              "$(bytes2hex(tree.bytes)) = \"$(joinpath(depot, "missing"))\"\n")
+        env = merge(ENV, Dict("JULIA_DEPOT_PATH" => join([depot; DEPOT_PATH], ':')))
+        cmd = `$(Base.julia_cmd()) --startup-file=no --project=$(Base.active_project()) -e
+               'using NeuralBloch; NeuralBloch.versioninfo()'`
+        text = read(setenv(cmd, env), String)
+        @test occursin("\n  model: Artifact \"neuralbloch_fisp600_rank16\" was not found", text)
+        @test occursin("\n  cache: ", text)
+        @test occursin("TensorRT library", text)
+    end
+end
+
+tier(:T0, "system: what detection skips") do
+    # Headers whose NvInferVersion.h has no version: the directory is skipped.
+    mktempdir() do root
+        include = mkpath(joinpath(root, "include"))
+        foreach(f -> write(joinpath(include, f), "no version here"), ("NvInfer.h", "NvOnnxParser.h", "NvInferVersion.h"))
+        withenv("TENSORRT_ROOT" => root) do
+            h = TensorRT.find_headers()
+            @test h === nothing || h.dir != include
+        end
+    end
+
+    @test TensorRT.load_library("libnb-no-such-library", (1, 2)) === nothing
+
+    # g++ on PATH: missing, failing, not saying a version, or correct.
+    mktempdir() do dir
+        gxx = joinpath(dir, "g++")
+        fake(script) = (write(gxx, "#!/bin/sh\n$script\n"); chmod(gxx, 0o755))
+        withenv("PATH" => dir) do
+            @test TensorRT.find_compiler() === nothing
+            fake("exit 1")
+            @test TensorRT.find_compiler() === nothing
+            fake("echo 'clang version 18'")
+            @test TensorRT.find_compiler() === nothing
+            fake("echo 13.3.0")
+            @test TensorRT.find_compiler() == TensorRT.Compiler(gxx, v"13.3.0")
+        end
+    end
+
+    # No package manager knows the package: the hint keeps its placeholder.
+    @test TensorRT.package_cuda(99) === nothing
 end
 
 # TENSORRT_ROOT's libraries come before the system's even when the system
@@ -142,6 +198,31 @@ tier(:T1, "system: TENSORRT_ROOT's libraries come first") do
         end
         withenv("TENSORRT_ROOT" => nothing) do
             @test Libdl.dlpath(TensorRT.load_library("libc", (6, 7))) != stub
+        end
+    end
+end
+
+# Stubs under TENSORRT_ROOT for libraries that TensorRT did not build. Each
+# stub has its own directory: the process keeps every library it loads, by
+# path.
+tier(:T1, "system: libraries that are not TensorRT's") do
+    stub(root, code) = run(pipeline(`$(SYSTEM.compiler.path) -shared -fPIC -x c++ - -o
+                                     $(joinpath(mkpath(joinpath(root, "lib")), "libnvinfer.so.10"))
+                                     -Wl,-soname,libnb-stub-$(basename(root)).so`; stdin = IOBuffer(code)))
+    # Without the version functions: detection does not throw, and finds no library.
+    mktempdir() do root
+        stub(root, "")
+        withenv("TENSORRT_ROOT" => root) do
+            @test TensorRT.detect().nvinfer === nothing
+        end
+    end
+    # A version without a build number, and no ONNX parser of that major.
+    mktempdir() do root
+        stub(root, "extern \"C\" int getInferLibVersion() { return 100300; }")
+        withenv("TENSORRT_ROOT" => root) do
+            nvinfer, parser = TensorRT.find_libraries((10,))
+            @test nvinfer == TensorRT.Library(joinpath(root, "lib", "libnvinfer.so.10"), v"10.3.0")
+            @test parser === nothing
         end
     end
 end

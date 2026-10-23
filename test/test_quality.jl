@@ -1,16 +1,22 @@
 # T0: package quality and the public surface. Julia only.
 
 using Aqua
+using CUDACore: CUDACore
 
 @testset "Aqua" begin
-    # persistent_tasks is broken upstream, not here (the same marker as
-    # MRSTAT.jl's): since 0.8.18 Aqua builds its precompile subprocess's
-    # manifest from each dependency's static Project.toml instead of
-    # resolving one, and CUDA_Runtime_jll ≥ 0.24 omits CUDA_Compiler_jll
-    # there (only the registry records it), so the subprocess cannot load
-    # CUDACore. `broken` keeps the check running: the day upstream is fixed it
-    # reports an Unexpected Pass — drop the marker then.
-    Aqua.test_all(NeuralBloch; persistent_tasks = (broken = true,))
+    # On machines with a CUDA driver, persistent_tasks is broken upstream, not
+    # here. On these machines, CUDA_Runtime_jll loads the wrapper of the
+    # toolkit for the driver. The wrapper loads CUDA_Compiler_jll, but
+    # CUDA_Runtime_jll ≥ 0.24 does not list this dependency in its
+    # Project.toml (only the registry has it). Since 0.8.18, Aqua makes the
+    # manifest of its precompile subprocess from the static Project.toml of
+    # each dependency, and does not resolve one. Thus, the subprocess cannot
+    # load CUDACore. Without a driver (hosted CI runners), no wrapper loads and
+    # the check passes. Thus, the marker applies only where a wrapper loaded:
+    # is_available(). With the marker, the check continues to run. When
+    # upstream corrects the problem, the check gives an Unexpected Pass. Then
+    # remove the marker.
+    Aqua.test_all(NeuralBloch; persistent_tasks = (broken = CUDACore.CUDA_Runtime_jll.is_available(),))
 end
 
 @testset "public names" begin
@@ -21,6 +27,6 @@ end
     # exported
     :Engine, :Model, :outputs, :predict!, :predict, :checkdomain,
     # public, qualified
-    :ntr, :domain, :batchprofile, :sequence, :functional, :versioninfo,
+    :ntr, :rank, :domain, :batchprofile, :sequence, :functional, :versioninfo,
     :BundleError, :PrerequisiteError, :CompileError, :BuildError, :TensorRTError])
 end

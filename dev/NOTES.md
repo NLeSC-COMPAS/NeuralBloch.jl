@@ -414,7 +414,148 @@ Documented, not changed:
   discards. TensorRT writes outputs only into the buffers bound to them,
   and places its intermediates in the context's scratch memory, never in a
   user's buffer. The signal-only test checks bitwise equality with the full
-  run on every machine where the suite runs.
+  run on every machine where the suite runs. Since D21 (2026-10-15) the signal has its
+  own engine, and no output is aliased.
+
+## The fisp600-rank16 v1 bundle (2026-10-15)
+
+(Superseded on the same day: the bundle is an artifact now, see
+"fisp600-rank16 0.1.0-beta.1 as an artifact".) `models/` then held a bundle
+that NeuralBloch's `export_bundle` wrote
+(commit `d5c2884`), copied unchanged: an ONNX model per target
+(`signal_and_derivatives`, `signal`, `coefficients`), the RF tables, and a
+generated card in format 2. The checkpoint is upstream's `outputs/model.pt`
+of 2026-10-14 (epoch 4970), trained with today's configuration: T₁ 0.1–6 s,
+T₂ 0.01–2 s, B₁ 0.5–1.5, exact forward-sensitivity derivatives from
+BlochSimulators 0.10, `separate` derivative mode, rank 16. The card agrees
+with the checkpoint's stored configuration and with the HDF5 attributes of
+upstream's datasets (BlochSimulators 0.10.0, forward sensitivity).
+
+**The reference.** The EPG reference follows the card's derivative method.
+Before switching, on the previous bundle and MRSTAT.jl's evaluation set:
+BlochSimulators 0.10's forward differences reproduce 0.9's NMAE to every
+printed digit; forward sensitivity gives the same signal, and forward
+differences converge to its derivatives at first order (NMAE 4.56 / 5.52 %
+for ∂T₁ / ∂T₂ with the card's steps, 0.57 / 0.62 % with a tenth of them,
+then Float32 cancellation). The previous model, trained on forward
+differences, is 4.5 % / 5.5 % from the exact derivatives.
+
+**Accuracy** of fisp600-rank16 v1 against forward sensitivity, NMAE signal /
+∂T₁ / ∂T₂:
+
+| Set | Measured | Bound |
+|---|---|---|
+| `scripts/validate.jl`: 14400 points over the card's domain | 1.2141 / 0.7043 / 1.1466 % | 1.05 × measured, rounded up: 1.28 / 0.74 / 1.21 % |
+| T3 test: 2000 points over the card's domain, `Xoshiro(2026)` | 1.1837 / 0.6952 / 1.1449 % | 2 × measured: 2.37 / 1.40 / 2.29 % |
+| MRSTAT.jl's evaluation set (the previous domain) | 0.9616 / 0.6244 / 0.9709 % | — |
+
+The previous model measured 0.5624 / 0.2519 / 0.4530 % on MRSTAT.jl's set
+against its own reference (forward differences): the new one is less
+accurate on the domain both cover. That is a property of the checkpoint, not
+of this package.
+
+## One engine per target (2026-10-15)
+
+An `Engine` now holds three TensorRT engines, one per target of the bundle:
+`signal_and_derivatives`, `signal` and `coefficients`. The keys of `out` choose
+the target; `outputs` and `predict` take `target =` (default
+`:signal_and_derivatives`, the former default), replacing `derivatives =`.
+
+**Scratch memory** of each execution context at `max` = 40000 voxels:
+439.5 MiB for signal and derivatives (11.2 KiB per voxel), 19.5 MiB for the
+signal, 19.5 MiB for the coefficients: the two new engines add 9 %. No
+shared scratch buffer is needed.
+
+**The signal alone** is bitwise equal to the full engine's signal on this
+machine (TensorRT picks the same kernels for the signal network); the test
+allows D18's 5e-6, since it is another engine. **The coefficients** are the
+signal's in a rank-16 basis: a least-squares rank-16 map reproduces the
+signal from them to 7e-8 relative (the test asks 1e-5).
+
+**Speed** (`scripts/validate.jl`, median ms, synchronized after each call):
+
+| N | `predict!` | signal | coefficients | engine alone |
+|---|---|---|---|---|
+| 1000 | 0.247 | 0.086 | 0.070 | 0.230 |
+| 10000 | 1.030 | 0.244 | 0.122 | 0.915 |
+| 14400 | 1.277 | 0.291 | 0.132 | 1.262 |
+| 40000 | 3.471 | 0.790 | 0.374 | 3.389 |
+
+The signal alone used to cost what signal and derivatives cost (1.26 ms at
+14400 voxels, task 10); now 0.29 ms. **Memory**: 0 bytes on the host and the
+GPU, 0 GCs, for all three targets. One allocation found on the way: binding
+the outputs by mapping a closure over their names allocated 96 bytes for the
+three-output set; the binding is now spelled out per output set.
+
+## fisp600-rank16 0.1.0-beta.1 as an artifact (2026-10-15)
+
+The model no longer lives in `models/`. NeuralBloch publishes it as the
+release `model-fisp600-rank16-v0.1.0-beta.1`, a pre-release, and Pkg installs
+it with this package as the artifact `neuralbloch_fisp600_rank16` (D24).
+NeuralBloch exported it at commit `0f18445`, with semantic model versions, the
+release file, and the card as `model_card.toml`, versioned by its own
+`schema_version = "1.0"` (D25). `dev/bind_bundle.jl` bound that file:
+
+| | |
+|---|---|
+| File | `neuralbloch-model-fisp600-rank16-v0.1.0-beta.1.tar.gz`, 1,083,547 bytes |
+| sha256 | `451e234f45a8e55a483f6d303797c75a43db2727d357eb774b88f78b5c5b5c79` |
+| git-tree-sha1 | `cdbeed78dfa5e0d70106cd17176903e66ca3341a` |
+
+It replaced the file of the same version exported at `b421e7d`, which was
+bound but never published: NeuralBloch's next commit reworded the card's
+header comment, and the release comes from the tip of its branch. Since
+`bind_bundle.jl` refuses a second file for one version, as it should for a
+published one, the new file was bound into an empty `Artifacts.toml` that then
+replaced the old one.
+
+The network is v1's: the same checkpoint (epoch 4970), and ONNX models with
+the same weights, nodes, inputs and outputs. Only each node's metadata
+differs, since NeuralBloch moved its export helpers into its scripts: it now
+names the export wrapper `scripts.export_onnx.TargetModel` instead of
+`src.targets.TargetModel`. With it, the three sha256 pins changed. The card
+differs from v1's in its file name, its first field (`schema_version = "1.0"`
+instead of `format = 2`), its version, its provenance commit and those pins.
+Packing the bundle again gives the same tarball, byte for byte.
+
+**Before publication**, `bind_bundle.jl` installed the release file through
+Pkg from its local path, with Pkg's own unpacking and checks of both hashes,
+so the suite and `scripts/validate.jl` ran against the artifact as users will
+get it: 813 tests passed (1 broken, the Aqua marker), and the accuracy is
+v1's to every printed digit, 1.2141 / 0.7043 / 1.1466 % on `validate.jl`'s
+set and 1.1837 / 0.6952 / 1.1449 % on the T3 set. `scripts/distribution.jl`
+downloads the artifact from the release, so it could run only once the
+release existed. The release was published on 2026-10-19, and commit
+`d316235` binds it.
+
+## Golden values in place of the T3 test (2026-10-19)
+
+The T3 test (`test/test_accuracy.jl`) compared the predictions for 2000
+voxels with the EPG simulation of BlochSimulators. That is a comparison with
+an external reference, which belongs in `scripts/` (the header of
+`test/runtests.jl`), and `scripts/validate.jl` measures the same NMAE on
+14400 voxels with tighter thresholds. But T3 was the only test that compared
+the outputs with an absolute reference: the T2 tests compare the engines with
+each other, thus an error that all of them share (T₁ and T₂ in the wrong
+rows of `x`, Re and Im exchanged, other units for the derivatives) passes
+them.
+
+`test/test_golden.jl` (T2) now does that check without BlochSimulators in
+the test environment. `scripts/golden.jl` writes `test/golden.toml`: 8
+voxels (`evaluation_set(model, 8; seed = 8)`), every 25th readout (24 of
+600) of the EPG signal and derivatives, and the NMAE of the model on them.
+The file names the family and the version; for another model the test fails
+and asks for a new file. The script gives the same file byte for byte.
+
+| | signal | ∂T₁ | ∂T₂ |
+|---|---|---|---|
+| NMAE on the golden values, 0.1.0-beta.1 | 1.0197 % | 0.5622 % | 0.8547 % |
+| Bound of the test: 2 × measured | 2.04 % | 1.12 % | 1.71 % |
+| T₁ and T₂ exchanged in the input | 54 × bound | 163 × bound | 48 × bound |
+| Re and Im exchanged in the output | 65 × bound | 119 × bound | 70 × bound |
+
+BlochSimulators, ComputationalResources and Random left the test
+environment. The tiers are now T0 to T2.
 
 ## Decisions
 
@@ -423,8 +564,8 @@ table recommends an option, implementation follows that recommendation.
 
 | # | Question | Decision | Source |
 |---|---|---|---|
-| D1 | Bundle location (plan decision 1) | In the package repository, `models/` (ONNX, card, RF tables); sha256 verified at load | plan recommendation |
-| D2 | Who writes the card (decision 2) | Hand-written here, with the source (file:line) of every field | plan recommendation |
+| D1 | Bundle location (plan decision 1) | ~~In the package repository, `models/` (ONNX, card, RF tables)~~ Superseded by D24: a Pkg artifact from NeuralBloch's release; sha256 verified at load | plan recommendation |
+| D2 | Who writes the card (decision 2) | ~~Hand-written here~~ Superseded by D20: generated by NeuralBloch's `export_bundle` | plan recommendation |
 | D3 | TF32 (decision 3) | Off by default, part of the cache key | S3 + plan |
 | D4 | Header source (decision 4) | Deb/rpm `-dev` packages only, including `cuda-cudart-dev` **and `cuda-crt`** | S1 + plan |
 | D5 | CUDACore vs CUDA.jl (decision 5) | CUDACore | plan recommendation |
@@ -434,7 +575,7 @@ table recommends an option, implementation follows that recommendation.
 | D9 | Version detection | `ccall` into the system libraries, not `nm` | S1 ③ |
 | D10 | Default profile | MIN/OPT/MAX = 1/14400/40000; `batch` keyword for others | S4 |
 | D11 | Workspace cap | None (TensorRT default) | S5 |
-| D12 | Signal-only derivatives | One shared Engine-owned scratch buffer for dT1 and dT2 | S6 ①② |
+| D12 | Signal-only derivatives | ~~One shared Engine-owned scratch buffer for dT1 and dT2~~ Superseded by D21: the signal has its own engine | S6 ①② |
 | D13 | Misaligned `out` | `ArgumentError` (TensorRT documents 256-byte alignment); refines the contract's "any address" | S6 ③ |
 | D14 | Before a build | `CUDACore.reclaim()`; report free memory on failure | S7 ① |
 | D15 | GPU for the builder | `CUDA_VISIBLE_DEVICES=GPU-<uuid>` | S7 ③ |
@@ -442,3 +583,10 @@ table recommends an option, implementation follows that recommendation.
 | D17 | CUDA graph | Not in v1 | S9 |
 | D18 | Tolerances | Bitwise within one engine; 5e-6 relative between builds | S2, S4, S6 |
 | D19 | Input staging | Three strided `cuMemcpy2DAsync`: zero host allocation, ≈ 3% of engine time | S10 |
+| D20 | The bundle and its card | Made entirely by NeuralBloch (`export_bundle`) and never edited here; delivered as an artifact (D24); the card, `model_card.toml` with its own `schema_version` (D25), states the family, semantic version, rank, an ONNX model and sha256 per target, and the derivative method with steps only for forward differences; `Model` reads schema 1.x | three-engine plan |
+| D21 | Targets | One TensorRT engine per target (signal and derivatives, signal, coefficients), in one `Engine`; the keys of `out` choose it; `outputs`/`predict` take `target` | three-engine plan |
+| D22 | Input buffers | One `(3, max)` buffer per target: `claim!` orders the runs of one handle only, so a shared buffer could be overwritten by another target's run on another stream | three-engine plan |
+| D23 | Bundle updates | ~~`dev/update_bundle.jl` installs a bundle into `models/`~~ `dev/bind_bundle.jl` binds a release file (D24); within a family, `contract_problems` (in the package, so the suite tests it) requires the same readouts, rank, sequence, RF tables and constraint, a domain the same or wider, and a higher version. Field by field, not a stored hash: it names what differs, and a wider domain is allowed | three-engine plan |
+| D24 | Bundle delivery | A non-lazy Pkg artifact per family, `neuralbloch_<family>` in `Artifacts.toml`, downloaded with the package from NeuralBloch's release `model-<family>-v<version>`, whose one file is the bundle's reproducible tarball; `Model()` reads `neuralbloch_fisp600_rank16`. `dev/bind_bundle.jl` binds a local release file before it is published, installing it through Pkg's own unpacking and checks of both hashes (when the depot does not have the tree yet; for a tree that is bound, the entry must name the same file). Model releases are pre-releases or not marked latest; a published file is never replaced, so a fix is a new version | three-engine plan, phase 2 |
+| D25 | Model and card versions | The model's version is a semantic version without build metadata, e.g. `0.1.0-beta.1`: PATCH re-exports the same weights, MINOR brings new weights or a wider domain, MAJOR stays 0 until the family is stable. Only the order is enforced: `VersionNumber`, after the strict pattern. The card versions itself separately: `model_card.toml` (formerly `card.toml`) starts with `schema_version = "1.0"`, "MAJOR.MINOR", replacing the integer `format` (1 to 3, never published). A newer MINOR only adds fields, which `Model` ignores; another MAJOR is refused | user decisions, 2026-10-15 and 2026-10-16 |
+| D26 | Accuracy in the suite | Golden EPG values for 8 voxels (`test/golden.toml`, T2, bound 2 × the NMAE that `scripts/golden.jl` measured), keyed by family and version; the EPG comparison on a large set is `scripts/validate.jl` only. BlochSimulators is not in the test environment | review of the three-engine branch, 2026-10-19 |
